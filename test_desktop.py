@@ -15,7 +15,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-TMP = Path(tempfile.gettempdir()) / "tally_desktop_test.db"
+TMP = Path(tempfile.gettempdir()) / "bookkeeper_desktop_test.db"
 TMP.unlink(missing_ok=True)
 os.environ["BOOKS_DB"] = str(TMP)
 
@@ -60,7 +60,7 @@ check("screen names", [name.replace("&&", "&") for name, _ in window.screens],
       ["Voucher Entry", "Day Book", "Ledger", "Trial Balance", "Profit & Loss",
        "Balance Sheet", "Masters"])
 check("starts on voucher entry", window.stack.currentIndex(), 0)
-check("title names the company", "Books" in window.windowTitle(), True)
+check("title names the company", "Bookkeeper" in window.windowTitle(), True)
 
 print("\n2) Tally's function keys switch voucher type")
 for key, name in desktop.VOUCHER_KEYS.items():

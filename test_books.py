@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-TMP = Path(tempfile.gettempdir()) / "tally_books_test.db"
+TMP = Path(tempfile.gettempdir()) / "bookkeeper_test.db"
 TMP.unlink(missing_ok=True)
 os.environ["BOOKS_DB"] = str(TMP)
 

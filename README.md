@@ -1,4 +1,4 @@
-# Books — Tally-style double-entry bookkeeping
+# Bookkeeper — Tally-style double-entry bookkeeping
 
 Two front ends over one set of books:
 
@@ -114,7 +114,7 @@ pip install -r requirements-desktop.txt pyinstaller
 python build_exe.py
 ```
 
-Produces `dist/Books.exe` — copy it anywhere and double-click, no Python
+Produces `dist/Bookkeeper.exe` — copy it anywhere and double-click, no Python
 needed on that machine. The books live in `data/books.db` beside the
 executable; keep the two together, or set `BOOKS_DB` to put the file somewhere
 else such as a OneDrive folder.

@@ -1092,7 +1092,7 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         db.init_db()
         company = db.get_setting("company_name", "My Company")
-        self.setWindowTitle(f"{company} — Books")
+        self.setWindowTitle(f"{company} — Bookkeeper")
         self.resize(1180, 760)
 
         self.stack = QtWidgets.QStackedWidget()
@@ -1214,7 +1214,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
-    app.setApplicationName("Books")
+    app.setApplicationName("Bookkeeper")
     window = MainWindow()
     window.show()
     return app.exec()

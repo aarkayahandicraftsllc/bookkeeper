@@ -2,7 +2,7 @@
 
     python build_exe.py
 
-Produces dist/Books.exe — copy it anywhere and double-click. Python does not
+Produces dist/Bookkeeper.exe — copy it anywhere and double-click. Python does not
 need to be installed on the machine that runs it.
 
 The books themselves live in data/books.db next to the executable, so keep the
@@ -23,7 +23,7 @@ def main() -> int:
 
     command = [
         sys.executable, "-m", "PyInstaller",
-        "--name", "Books",
+        "--name", "Bookkeeper",
         "--onefile",
         "--windowed",                 # no console window
         "--noconfirm",
@@ -39,7 +39,7 @@ def main() -> int:
     if result.returncode:
         return result.returncode
 
-    built = HERE / "dist" / "Books.exe"
+    built = HERE / "dist" / "Bookkeeper.exe"
     if built.exists():
         size = built.stat().st_size / (1024 * 1024)
         print(f"\nBuilt {built}  ({size:.0f} MB)")

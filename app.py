@@ -14,7 +14,7 @@ import streamlit as st
 import accounting as acc
 import db
 
-st.set_page_config(page_title="Books", page_icon="📗", layout="wide")
+st.set_page_config(page_title="Bookkeeper", page_icon="📗", layout="wide")
 db.init_db()
 
 COMPANY = db.get_setting("company_name", "My Company")
