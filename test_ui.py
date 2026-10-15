@@ -1,0 +1,146 @@
+"""Renders the app and drives voucher entry through the real widgets.
+
+Run:  python test_ui.py
+"""
+
+import os
+import sys
+import tempfile
+from datetime import date
+from pathlib import Path
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+TMP = Path(tempfile.gettempdir()) / "tally_ui_test.db"
+TMP.unlink(missing_ok=True)
+os.environ["BOOKS_DB"] = str(TMP)
+
+from streamlit.testing.v1 import AppTest  # noqa: E402
+
+import accounting as acc  # noqa: E402
+import db  # noqa: E402
+
+APP = Path(__file__).with_name("app.py")
+
+
+def fresh():
+    return AppTest.from_file(str(APP), default_timeout=120).run()
+
+
+print("\n1) It renders on empty books")
+at = fresh()
+assert not at.exception, at.exception
+tabs = [t.label for t in at.tabs]
+print(f"PASS  {len(tabs)} tabs: {tabs}")
+assert len(tabs) == 7, tabs
+
+warnings = " ".join(w.value for w in at.warning)
+assert "two ledgers" in warnings, warnings
+print("PASS  voucher entry explains it needs ledgers first")
+
+print("\n2) Creating masters through the UI")
+db.add_ledger("Bank", "Bank Accounts", 100_000, "Dr")
+db.add_ledger("Capital", "Capital Account", 100_000, "Cr")
+db.add_ledger("Sales", "Sales Accounts")
+db.add_ledger("Rent", "Indirect Expenses")
+
+at = fresh()
+assert not at.exception, at.exception
+assert not any("two ledgers" in w.value for w in at.warning)
+ledger_pick = next(s for s in at.selectbox if s.key == "ledger_pick")
+assert "Bank" in list(ledger_pick.options), list(ledger_pick.options)
+print(f"PASS  {len(ledger_pick.options)} ledgers offered on the Ledger tab")
+
+vtype = next(r for r in at.radio if r.key.startswith("vch_type"))
+assert list(vtype.options) == list(db.VOUCHER_TYPES), list(vtype.options)
+assert vtype.value == "Payment", vtype.value
+print(f"PASS  voucher types: {list(vtype.options)}")
+
+print("\n3) Accept is dead until the voucher balances")
+accept = next(b for b in at.button if "Accept voucher" in b.label)
+assert accept.disabled, "Accept should start disabled"
+from streamlit.testing.v1.errors import AppTestError  # noqa: E402
+
+try:
+    accept.click().run()
+    raise AssertionError("a disabled Accept button was clickable")
+except AppTestError:
+    pass
+print("PASS  Accept is disabled on an empty grid and cannot be clicked")
+
+labels = {m.label for m in at.metric}
+for wanted in ("Total debit", "Total credit", "Difference"):
+    assert wanted in labels, labels
+print("PASS  running totals are shown while entering")
+
+print("\n4) Posting a voucher through the data layer, then reading it back")
+db.save_voucher(voucher_type="Receipt", voucher_date=date.today(),
+                narration="cash sale",
+                lines=[{"ledger_id": db.ledger_id("Bank"), "debit": 50_000,
+                        "credit": 0},
+                       {"ledger_id": db.ledger_id("Sales"), "debit": 0,
+                        "credit": 50_000}])
+db.save_voucher(voucher_type="Payment", voucher_date=date.today(),
+                narration="office rent",
+                lines=[{"ledger_id": db.ledger_id("Rent"), "debit": 12_000,
+                        "credit": 0},
+                       {"ledger_id": db.ledger_id("Bank"), "debit": 0,
+                        "credit": 12_000}])
+
+at = fresh()
+assert not at.exception, at.exception
+metrics = {m.label: m.value for m in at.metric}
+assert metrics["Total debit"] == metrics["Total credit"], metrics
+print(f"PASS  trial balance {metrics['Total debit']} on both sides")
+assert metrics["Liabilities"] == metrics["Assets"], metrics
+print(f"PASS  balance sheet {metrics['Assets']} on both sides")
+
+oks = " ".join(s.value for s in at.success)
+assert "Debits equal credits" in oks, oks
+assert "Both sides agree" in oks, oks
+print("PASS  both statements report themselves balanced")
+
+print("\n5) The reports agree with the data layer")
+trial = acc.trial_balance()
+sheet = acc.balance_sheet()
+pl = acc.profit_and_loss()
+assert trial["difference"] == 0.0, trial
+assert sheet["totals"]["difference"] == 0.0, sheet["totals"]
+assert pl["totals"]["net_profit"] == 38_000.0, pl["totals"]   # 50,000 - 12,000
+print(f"PASS  net profit {pl['totals']['net_profit']:,.2f}, both statements tie")
+
+statement = acc.ledger_statement(db.ledger_id("Bank"))
+assert statement["opening"] == 100_000.0, statement["opening"]
+assert statement["closing"] == 138_000.0, statement["closing"]
+assert len(statement["entries"]) == 2, statement["entries"]
+print(f"PASS  bank ledger: opening {statement['opening']:,.2f} "
+      f"-> closing {statement['closing']:,.2f}")
+
+print("\n6) Day Book lists the vouchers and offers an export")
+book = acc.day_book()
+assert len(book) == 2, book
+downloads = [b.label for b in at.download_button]
+assert any("Day Book" in d for d in downloads), downloads
+assert any("Trial Balance" in d for d in downloads), downloads
+print(f"PASS  {len(book)} vouchers, exports: {downloads}")
+
+print("\n7) Every period option renders")
+for key in ("daybook_period", "pl_period", "ledger_period"):
+    picker = next(s for s in at.selectbox if s.key == key)
+    for option in picker.options:
+        at = next(s for s in at.selectbox if s.key == key).set_value(option).run()
+        assert not at.exception, (key, option, at.exception)
+print("PASS  all period selections render cleanly")
+
+print("\n8) An opening-balance difference is surfaced")
+db.add_ledger("Stray", "Fixed Assets", 7_000, "Dr")
+at = fresh()
+assert not at.exception, at.exception
+warned = " ".join(w.value for w in at.warning)
+assert "Difference in opening balances" in warned, warned
+print("PASS  the header warns about the opening difference")
+sheet = acc.balance_sheet()
+assert sheet["totals"]["difference"] == 0.0, sheet["totals"]
+print("PASS  and the balance sheet still balances, with the residual named")
+
+print("\nALL UI CHECKS PASSED")

@@ -1,0 +1,333 @@
+"""Works a small set of books by hand and checks every report against it.
+
+Run:  python test_books.py
+Uses a throwaway database, so nothing real is touched.
+"""
+
+import os
+import sys
+import tempfile
+from datetime import date
+from pathlib import Path
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+TMP = Path(tempfile.gettempdir()) / "tally_books_test.db"
+TMP.unlink(missing_ok=True)
+os.environ["BOOKS_DB"] = str(TMP)
+
+import accounting as acc  # noqa: E402
+import db  # noqa: E402
+
+FAILURES = []
+
+
+def check(label, got, want, tol=0.005):
+    ok = abs(got - want) <= tol if isinstance(want, float) else got == want
+    print(f"  {'PASS' if ok else 'FAIL'}  {label}: got {got!r}, want {want!r}")
+    if not ok:
+        FAILURES.append(label)
+
+
+def post(vtype, day, narration, *lines):
+    """post('Payment', 5, 'rent', ('Rent', 10000, 0), ('Cash', 0, 10000))"""
+    return db.save_voucher(
+        voucher_type=vtype, voucher_date=date(2026, 4, day), narration=narration,
+        lines=[{"ledger_id": db.ledger_id(name), "debit": dr, "credit": cr}
+               for name, dr, cr in lines],
+    )
+
+
+db.init_db()
+
+print("\n1) The reserved group tree matches Tally's")
+groups = db.get_groups()
+check("28 reserved groups seeded", len(groups), 27)
+check("all marked reserved", int(groups["is_reserved"].sum()), 27)
+by_name = groups.set_index("name")
+check("Sundry Debtors sits under Current Assets",
+      by_name.loc["Sundry Debtors", "parent_name"], "Current Assets")
+check("Sundry Creditors under Current Liabilities",
+      by_name.loc["Sundry Creditors", "parent_name"], "Current Liabilities")
+check("Sales is income", by_name.loc["Sales Accounts", "nature"], "income")
+check("Sales affects gross profit",
+      int(by_name.loc["Sales Accounts", "affects_gross"]), 1)
+check("Indirect Expenses does not",
+      int(by_name.loc["Indirect Expenses", "affects_gross"]), 0)
+check("Cash ledger created", "Cash" in set(db.get_ledgers()["name"]), True)
+check("Cash is under Cash-in-hand",
+      db.get_ledgers().set_index("name").loc["Cash", "group_name"], "Cash-in-hand")
+
+print("\n2) Masters: ledgers under groups, with opening balances")
+db.add_ledger("Bank of India", "Bank Accounts", 200_000, "Dr")
+db.add_ledger("Capital - Owner", "Capital Account", 250_000, "Cr")
+db.add_ledger("Stall Equipment", "Fixed Assets", 50_000, "Dr")
+db.add_ledger("Sales", "Sales Accounts")
+db.add_ledger("Purchases", "Purchase Accounts")
+db.add_ledger("Freight Inward", "Direct Expenses")
+db.add_ledger("Rent", "Indirect Expenses")
+db.add_ledger("Interest Received", "Indirect Incomes")
+db.add_ledger("Acme Traders", "Sundry Debtors")
+db.add_ledger("Bharat Supplies", "Sundry Creditors")
+
+ledgers = db.get_ledgers().set_index("name")
+check("ledger count", len(ledgers), 11)
+check("opening Dr is positive",
+      float(ledgers.loc["Bank of India", "opening_signed"]), 200_000.0)
+check("opening Cr is negative",
+      float(ledgers.loc["Capital - Owner", "opening_signed"]), -250_000.0)
+check("openings disagree by 0", acc.opening_difference(), 0.0)
+
+for label, args in [
+    ("duplicate ledger name", ("Rent", "Indirect Expenses")),
+    ("unknown group", ("Nonsense", "No Such Group")),
+]:
+    try:
+        db.add_ledger(*args)
+        check(label, "accepted", "rejected")
+    except ValueError:
+        check(label, "rejected", "rejected")
+try:
+    db.add_ledger("Negative", "Fixed Assets", -5)
+    check("negative opening", "accepted", "rejected")
+except ValueError:
+    check("negative opening", "rejected", "rejected")
+
+print("\n3) A voucher must balance before it will post")
+for label, lines in [
+    ("unbalanced", [("Rent", 1000, 0), ("Cash", 0, 900)]),
+    ("single line", [("Rent", 1000, 0)]),
+    ("both columns on one line", [("Rent", 500, 500), ("Cash", 0, 500)]),
+    ("same ledger twice", [("Rent", 500, 0), ("Rent", 0, 500)]),
+    ("zero amounts", [("Rent", 0, 0), ("Cash", 0, 0)]),
+]:
+    try:
+        post("Journal", 1, label, *lines)
+        check(label, "accepted", "rejected")
+    except ValueError:
+        check(label, "rejected", "rejected")
+
+print("\n4) Voucher numbering runs per type")
+check("first payment is 1", db.next_voucher_number("Payment"), 1)
+post("Payment", 5, "April rent", ("Rent", 30_000, 0), ("Bank of India", 0, 30_000))
+check("next payment is 2", db.next_voucher_number("Payment"), 2)
+check("receipts number separately", db.next_voucher_number("Receipt"), 1)
+post("Payment", 6, "Freight", ("Freight Inward", 5_000, 0), ("Cash", 0, 5_000))
+check("second payment numbered 2",
+      int(db.get_vouchers(voucher_type="Payment")["number"].min()), 1)
+
+print("\n5) Trading and indirect entries")
+# credit sale to Acme, part received
+post("Sales", 7, "Invoice 1", ("Acme Traders", 400_000, 0), ("Sales", 0, 400_000))
+post("Receipt", 8, "Acme part payment",
+     ("Bank of India", 250_000, 0), ("Acme Traders", 0, 250_000))
+# credit purchase from Bharat, part paid
+post("Purchase", 9, "Bill 77", ("Purchases", 180_000, 0), ("Bharat Supplies", 0, 180_000))
+post("Payment", 10, "Bharat part payment",
+     ("Bharat Supplies", 100_000, 0), ("Bank of India", 0, 100_000))
+post("Receipt", 11, "Bank interest",
+     ("Bank of India", 2_000, 0), ("Interest Received", 0, 2_000))
+post("Contra", 12, "Cash drawn from bank",
+     ("Cash", 20_000, 0), ("Bank of India", 0, 20_000))
+
+print("\n6) Ledger balances")
+bal = acc.balances().set_index("ledger")
+# bank: 200,000 - 30,000 + 250,000 - 100,000 + 2,000 - 20,000
+check("Bank of India", float(bal.loc["Bank of India", "closing"]), 302_000.0)
+check("Cash", float(bal.loc["Cash", "closing"]), 15_000.0)
+check("Acme Traders owes 150,000", float(bal.loc["Acme Traders", "closing"]), 150_000.0)
+check("Bharat Supplies owed 80,000",
+      float(bal.loc["Bharat Supplies", "closing"]), -80_000.0)
+check("Sales is a credit balance", float(bal.loc["Sales", "closing"]), -400_000.0)
+check("Rent is a debit balance", float(bal.loc["Rent", "closing"]), 30_000.0)
+
+print("\n7) The trial balance agrees")
+tb = acc.trial_balance()
+check("debits equal credits", tb["difference"], 0.0, tol=0.0)
+check("no opening difference", acc.opening_difference(), 0.0)
+rows = tb["rows"].set_index("Particulars")
+check("bank shows as a debit", float(rows.loc["Bank of India", "Debit"]), 302_000.0)
+check("capital shows as a credit",
+      float(rows.loc["Capital - Owner", "Credit"]), 250_000.0)
+check("nil ledgers are omitted", "Stall Equipment" in rows.index, True)
+grouped = acc.trial_balance(by_group=True)
+check("grouped trial balance also agrees", grouped["difference"], 0.0, tol=0.0)
+check("grouped totals match the detailed one", grouped["debit"], tb["debit"])
+
+print("\n8) Profit & loss, trading then indirect")
+pl = acc.profit_and_loss()
+t = pl["totals"]
+check("trading income", t["trading_income"], 400_000.0)
+check("trading expense", t["trading_expense"], 185_000.0)   # purchases + freight
+check("gross profit", t["gross_profit"], 215_000.0)
+check("indirect income", t["indirect_income"], 2_000.0)
+check("indirect expense", t["indirect_expense"], 30_000.0)
+check("net profit", t["net_profit"], 187_000.0)
+check("freight is a trading expense",
+      "Freight Inward" in set(pl["trading_expense"]["Particulars"]), True)
+check("rent is an indirect expense",
+      "Rent" in set(pl["indirect_expense"]["Particulars"]), True)
+check("no balance-sheet ledger leaked in",
+      "Bank of India" in set(pl["indirect_expense"]["Particulars"]), False)
+
+print("\n9) The balance sheet balances")
+bs = acc.balance_sheet()
+check("both sides agree", bs["totals"]["difference"], 0.0, tol=0.0)
+check("no difference in opening balances",
+      "Difference in opening balances" in set(bs["liabilities"]["Particulars"])
+      or "Difference in opening balances" in set(bs["assets"]["Particulars"]),
+      False)
+liab = bs["liabilities"].set_index("Particulars")
+asset = bs["assets"].set_index("Particulars")
+check("capital on the liabilities side",
+      float(liab.loc["Capital Account", "Amount"]), 250_000.0)
+check("creditors on the liabilities side",
+      float(liab.loc["Current Liabilities", "Amount"]), 80_000.0)
+check("profit carried to the liabilities side",
+      float(liab.loc["Profit & Loss A/c", "Amount"]), 187_000.0)
+check("fixed assets", float(asset.loc["Fixed Assets", "Amount"]), 50_000.0)
+# current assets: bank 302,000 + cash 15,000 + debtor 150,000
+check("current assets", float(asset.loc["Current Assets", "Amount"]), 467_000.0)
+check("assets total", bs["totals"]["assets"], 517_000.0)
+check("liabilities total", bs["totals"]["liabilities"], 517_000.0)
+
+print("\n10) A ledger statement reads like Tally's")
+st = acc.ledger_statement(db.ledger_id("Bank of India"))
+check("opening", st["opening"], 200_000.0)
+check("closing", st["closing"], 302_000.0)
+# 2 debits (receipt 250,000 + interest 2,000) and 3 credits
+# (rent 30,000 + supplier 100,000 + contra 20,000)
+check("five entries", len(st["entries"]), 5)
+check("debit total", st["debit_total"], 252_000.0)
+check("credit total", st["credit_total"], 150_000.0)
+check("opening + debits - credits = closing",
+      round(st["opening"] + st["debit_total"] - st["credit_total"], 2), st["closing"])
+first = st["entries"].iloc[0]
+check("a credit entry reads 'By'", str(first["Particulars"]).startswith("By "), True)
+check("particulars name the other side", "Rent" in str(first["Particulars"]), True)
+check("the running balance is formatted with a side",
+      str(st["entries"].iloc[-1]["Balance"]), "302,000.00 Dr")
+
+acme = acc.ledger_statement(db.ledger_id("Acme Traders"))
+check("debtor closing is Dr", acme["closing"], 150_000.0)
+check("a debit entry reads 'To'",
+      str(acme["entries"].iloc[0]["Particulars"]).startswith("To "), True)
+
+print("\n11) Period filters on the ledger statement")
+later = acc.ledger_statement(db.ledger_id("Bank of India"),
+                             date_from="2026-04-08", date_to="2026-04-30")
+check("opening rolls forward to the start date", later["opening"], 170_000.0)
+check("closing is unchanged", later["closing"], 302_000.0)
+check("only the later entries appear", len(later["entries"]), 4)
+
+print("\n12) The day book lists every voucher once")
+book = acc.day_book()
+check("eight vouchers", len(book), 8)
+check("each row balances",
+      float((book["Debit"] - book["Credit"]).abs().max()), 0.0)
+check("newest first", str(book.iloc[0]["Date"]), "2026-04-12")
+check("voucher types are named", "Contra" in set(book["Vch Type"]), True)
+narrow = acc.day_book(date_from="2026-04-09", date_to="2026-04-10")
+check("the date filter works", len(narrow), 2)
+
+print("\n13) Voucher type guidance, as warnings not blocks")
+ledgers_now = db.get_ledgers(include_inactive=True)
+
+
+def warn(vtype, *lines):
+    return db.voucher_type_warnings(
+        vtype,
+        [{"ledger_id": db.ledger_id(n), "debit": dr, "credit": cr}
+         for n, dr, cr in lines],
+        ledgers_now,
+    )
+
+
+check("a payment that credits bank is fine",
+      warn("Payment", ("Rent", 100, 0), ("Bank of India", 0, 100)), [])
+check("a payment crediting nothing liquid is flagged",
+      len(warn("Payment", ("Rent", 100, 0), ("Acme Traders", 0, 100))), 1)
+check("a receipt debiting bank is fine",
+      warn("Receipt", ("Bank of India", 100, 0), ("Sales", 0, 100)), [])
+check("a contra between bank and cash is fine",
+      warn("Contra", ("Cash", 100, 0), ("Bank of India", 0, 100)), [])
+check("a contra touching a non-cash ledger is flagged",
+      len(warn("Contra", ("Rent", 100, 0), ("Bank of India", 0, 100))), 1)
+check("a journal touching bank is flagged",
+      len(warn("Journal", ("Rent", 100, 0), ("Bank of India", 0, 100))), 1)
+check("a journal between two nominal ledgers is fine",
+      warn("Journal", ("Rent", 100, 0), ("Acme Traders", 0, 100)), [])
+
+print("\n14) Opening balances that disagree are shown, not hidden")
+db.add_ledger("Odd Asset", "Fixed Assets", 9_000, "Dr")
+check("opening difference appears", acc.opening_difference(), 9_000.0)
+tb2 = acc.trial_balance()
+check("the trial balance now shows the gap", tb2["difference"], 9_000.0)
+bs2 = acc.balance_sheet()
+check("the balance sheet still balances", bs2["totals"]["difference"], 0.0, tol=0.0)
+check("because the residual is named",
+      float(bs2["liabilities"].set_index("Particulars")
+            .loc["Difference in opening balances", "Amount"]), 9_000.0)
+db.delete_ledger(db.ledger_id("Odd Asset"))
+check("removing it clears the gap", acc.opening_difference(), 0.0)
+
+print("\n15) Editing and deleting a voucher")
+vid = db.get_vouchers(voucher_type="Payment")["id"].min()
+head, lines = db.get_voucher(int(vid))
+check("the voucher reads back", len(lines), 2)
+db.save_voucher(voucher_id=int(vid), voucher_type="Payment",
+                voucher_date=date(2026, 4, 5), narration="April rent (revised)",
+                lines=[{"ledger_id": db.ledger_id("Rent"), "debit": 35_000,
+                        "credit": 0},
+                       {"ledger_id": db.ledger_id("Bank of India"), "debit": 0,
+                        "credit": 35_000}])
+check("rent after the edit",
+      float(acc.balances().set_index("ledger").loc["Rent", "closing"]), 35_000.0)
+check("the trial balance still agrees", acc.trial_balance()["difference"], 0.0, tol=0.0)
+
+db.delete_voucher(int(vid))
+check("one fewer voucher", len(acc.day_book()), 7)
+check("rent is back to nil",
+      float(acc.balances().set_index("ledger").loc["Rent", "closing"]), 0.0)
+check("no orphan lines", len(db.get_lines()), 14)
+check("still balanced after a delete",
+      acc.trial_balance()["difference"], 0.0, tol=0.0)
+check("the balance sheet still balances",
+      acc.balance_sheet()["totals"]["difference"], 0.0, tol=0.0)
+
+print("\n16) A ledger in use cannot be deleted")
+check("usage is counted", db.ledger_usage(db.ledger_id("Sales")) > 0, True)
+try:
+    db.delete_ledger(db.ledger_id("Sales"))
+    check("deleting a used ledger", "accepted", "rejected")
+except ValueError:
+    check("deleting a used ledger", "rejected", "rejected")
+try:
+    db.delete_ledger(db.ledger_id("Cash"))
+    check("deleting the reserved Cash ledger", "accepted", "rejected")
+except ValueError:
+    check("deleting the reserved Cash ledger", "rejected", "rejected")
+
+print("\n17) Custom sub-groups inherit their parent's nature")
+db.add_group("Vehicle Loan", "Secured Loans")
+check("nature inherited",
+      db.get_groups().set_index("name").loc["Vehicle Loan", "nature"], "liability")
+db.add_ledger("Car Loan", "Vehicle Loan", 300_000, "Cr")
+check("it lands on the liabilities side",
+      float(acc.balance_sheet()["liabilities"].set_index("Particulars")
+            .loc["Loans (Liability)", "Amount"]), 300_000.0)
+check("and the sheet still balances",
+      acc.balance_sheet()["totals"]["difference"], 0.0, tol=0.0)
+try:
+    db.delete_group("Vehicle Loan")
+    check("deleting a group with ledgers", "accepted", "rejected")
+except ValueError:
+    check("deleting a group with ledgers", "rejected", "rejected")
+try:
+    db.delete_group("Fixed Assets")
+    check("deleting a reserved group", "accepted", "rejected")
+except ValueError:
+    check("deleting a reserved group", "rejected", "rejected")
+
+print("\n" + ("ALL CHECKS PASSED" if not FAILURES else f"FAILURES: {FAILURES}"))
+raise SystemExit(1 if FAILURES else 0)

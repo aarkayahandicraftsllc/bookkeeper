@@ -1,0 +1,138 @@
+# Books — Tally-style double-entry bookkeeping
+
+Two front ends over one set of books:
+
+```bash
+python desktop.py          # native desktop app (PySide6/Qt)
+streamlit run app.py       # browser version
+```
+
+Both share `db.py` and `accounting.py` and read the same `data/books.db`, so
+you can use whichever suits the moment. The accounting lives in those two
+modules, not in either interface.
+
+## Why a desktop build
+
+Voucher entry wants a grid that reacts to every keystroke and function keys
+that switch voucher type. Streamlit reruns the whole script on each
+interaction, so the browser version is fine for reports but never feels like
+Tally for data entry. The desktop app is for entry; use either for reports.
+
+### Keyboard
+
+| Key | Does |
+| --- | --- |
+| `F4` `F5` `F6` `F7` `F8` `F9` | Contra, Payment, Receipt, Journal, Sales, Purchase |
+| `Ctrl+A` | Accept the voucher |
+| `Ctrl+1` … `Ctrl+7` | Jump between screens |
+| `Alt+C` | Create a ledger from the line you are on |
+| `F2` | Set the voucher date |
+| `F11` | Refresh every report |
+| `Esc` | Back to voucher entry |
+
+## Creating masters mid-voucher
+
+You rarely know every account before you start entering. Press **Alt+C** (or
+the *Create ledger* button) on the voucher screen and the ledger is created
+there and then, dropped into the line you were on, and usable immediately — the
+same idea as Tally's Alt+C.
+
+Two details that make it worth using rather than breaking off:
+
+* **Whatever you had typed into the cell becomes the name**, so a half-typed
+  account is not wasted.
+* The dialog **says where the balance will land** — "a liability account, its
+  balance will appear on the liabilities side of the Balance Sheet" — because
+  the group you pick is the decision that matters, and it is easy to get wrong.
+
+If the group you need does not exist either, **New group…** inside that dialog
+creates it without losing the ledger you were part-way through.
+
+The Streamlit version has the same thing as an expander above the grid.
+
+## Structure
+
+It follows Tally's, because the reports fall out of it:
+
+```
+Group  →  Ledger  →  Voucher line
+```
+
+* **Groups** form a tree, with the 27 reserved groups seeded as Tally has them
+  — Capital Account, Sundry Debtors under Current Assets, Sundry Creditors
+  under Current Liabilities, Duties & Taxes, Direct and Indirect Expenses, and
+  so on. A group's **nature** (asset / liability / income / expense) decides
+  which statement a balance lands on. A separate **trading** flag marks the
+  accounts that produce gross profit.
+* **Ledgers** are what you post to. Each sits under exactly one group and may
+  carry an opening balance, entered as a positive amount plus Dr or Cr.
+* **Vouchers** hold two or more lines whose debits and credits must agree.
+
+Add your own sub-groups under any reserved group when you want finer
+subtotals; a sub-group inherits its parent's nature.
+
+Balances are held **debit-positive** internally: `+500` is 500 Dr, `-500` is
+500 Cr. Presentation flips it back.
+
+## Screens
+
+| Screen | What it does |
+| --- | --- |
+| **Voucher Entry** | Type, date, auto number, narration, then a Dr/Cr grid with ledger autocomplete and running totals. Accept is disabled until the two sides agree. |
+| **Day Book** | Every voucher in the period, newest first. Double-click to alter one. |
+| **Ledger** | One account: opening balance, every entry with **To**/**By** particulars naming the other side, a running balance, closing. |
+| **Trial Balance** | Closing balances as Dr and Cr, by ledger or summarised by group. |
+| **Profit & Loss** | Trading account → gross profit, then the indirect accounts → net profit. |
+| **Balance Sheet** | Liabilities and assets side by side, with net profit carried to Profit & Loss A/c. |
+| **Masters** | Create and alter ledgers and sub-groups. |
+
+## The rules it enforces, and the ones it only advises
+
+**Hard:** a voucher must balance, needs at least two lines, across at least two
+different ledgers, each line on one side only. This is checked in `db.py`, not
+just in the form, so it holds however the call arrives.
+
+**Advisory:** the cash and bank conventions per voucher type — a Payment should
+credit cash or bank, a Receipt should debit it, a Contra should be between two
+of them, a Journal should touch neither. You get told, not blocked, because
+real books occasionally need the exception.
+
+## Difference in opening balances
+
+Because every voucher balances, the sum of all closing balances always equals
+the sum of all **opening** balances. So if your openings disagree, the trial
+balance will too — and that is not a problem with any voucher.
+
+Rather than hide it, the residual is shown as **Difference in opening
+balances**: as a gap on the trial balance, and as its own line on the balance
+sheet so that statement still balances. That is what Tally does.
+
+## Packaging a desktop executable
+
+```bash
+pip install -r requirements-desktop.txt pyinstaller
+python build_exe.py
+```
+
+Produces `dist/Books.exe` — copy it anywhere and double-click, no Python
+needed on that machine. The books live in `data/books.db` beside the
+executable; keep the two together, or set `BOOKS_DB` to put the file somewhere
+else such as a OneDrive folder.
+
+## Tests
+
+```bash
+python test_books.py                              # the accounting, 92 checks
+python test_ui.py                                 # the Streamlit front end
+QT_QPA_PLATFORM=offscreen python test_desktop.py   # the desktop front end
+```
+
+`test_books.py` works a full set of books by hand — opening balances, a credit
+sale part received, a credit purchase part paid, a contra, bank interest — and
+asserts the trial balance and balance sheet differences are exactly `0.0` with
+no tolerance, including after edits, deletes and custom sub-groups.
+
+`test_desktop.py` drives the real Qt widgets with the offscreen platform, so
+the desktop build is tested rather than only eyeballed: function keys, the
+disabled Accept button, the balance check, the voucher-type advice, posting,
+altering from the Day Book, and creating masters.
