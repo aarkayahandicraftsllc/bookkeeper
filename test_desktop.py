@@ -19,7 +19,7 @@ TMP = Path(tempfile.gettempdir()) / "bookkeeper_desktop_test.db"
 TMP.unlink(missing_ok=True)
 os.environ["BOOKS_DB"] = str(TMP)
 
-from PySide6 import QtGui, QtWidgets  # noqa: E402
+from PySide6 import QtCore, QtGui, QtWidgets  # noqa: E402
 
 import accounting as acc  # noqa: E402
 import db  # noqa: E402
@@ -338,6 +338,143 @@ window.set_color_scheme("light")
 check("back on light, the platform style is restored",
       QtWidgets.QApplication.style().objectName().lower()
       in (theme._native_style.lower(), ""), True)
+
+print("\n16) Text size, and the layout following it")
+
+check("the default is a step above the platform size",
+      theme.TEXT_STEPS[theme.DEFAULT_TEXT] > 0, True)
+
+base_pt = theme.point_size()
+window.set_color_scheme("light")
+
+def settle():
+    """Let Qt catch up, INCLUDING deferred deletions.
+
+    processEvents() does not deliver DeferredDelete at the same event-loop
+    level, so widgets retired with deleteLater() linger and the counts below
+    creep upward - which looks exactly like a leak and is not one. Flushing
+    them explicitly means these counts would catch a real leak.
+    """
+    QtWidgets.QApplication.processEvents()
+    QtWidgets.QApplication.sendPostedEvents(
+        None, QtCore.QEvent.Type.DeferredDelete)
+
+
+sizes = {}
+for key in theme.TEXT_ORDER:
+    window.set_text_size(key)
+    settle()
+    pt = theme.point_size()
+    sizes[key] = pt
+    check(f"{key}: saved to the books",
+          db.get_setting(theme.FONT_SETTING_KEY), key)
+    check(f"{key}: menu entry is ticked",
+          window._text_actions[key].isChecked(), True)
+    check(f"{key}: the application font is {pt}pt",
+          QtWidgets.QApplication.font().pointSize(), pt)
+
+    # Everything that sets its own point size must track the setting. These are
+    # the widgets that do NOT follow the application font on their own.
+    headings = [w for w in window.findChildren(QtWidgets.QWidget)
+                if w.property("heading")]
+    monos = [w for w in window.findChildren(QtWidgets.QWidget)
+             if w.property("mono")]
+    check(f"{key}: all {len(headings)} headings scaled",
+          {w.font().pointSize() for w in headings},
+          {theme.heading_point_size()})
+    check(f"{key}: all {len(monos)} monospaced labels scaled",
+          {w.font().pointSize() for w in monos}, {pt})
+
+    # A table's amount cells are rebuilt on refresh; they must come back at the
+    # new size too, or the figures stay small while their labels grow.
+    window.show_screen(3)                      # Trial Balance
+    QtWidgets.QApplication.processEvents()
+    cells = [window.trial.table.item(r, c)
+             for r in range(window.trial.table.rowCount())
+             for c in range(window.trial.table.columnCount())
+             if window.trial.table.item(r, c)
+             and window.trial.table.item(r, c).font().family() != ""]
+    mono_cells = [i for i in cells if i.font().pointSize() == pt]
+    check(f"{key}: table cells at the new size", bool(mono_cells), True)
+
+check("each step is strictly larger than the last",
+      [sizes[k] for k in theme.TEXT_ORDER],
+      sorted(sizes[k] for k in theme.TEXT_ORDER))
+check("Normal is the platform's own size", sizes["normal"], theme._base_point)
+
+# The layout has to ADAPT, not just redraw bigger. Nothing may be clipped: a
+# widget whose sizeHint exceeds the room it was given is cut off on screen.
+window.set_text_size("largest")
+window.resize(window._sized_to_text())
+QtWidgets.QApplication.processEvents()
+clipped = []
+for index in range(len(window.screens)):
+    window.show_screen(index)
+    QtWidgets.QApplication.processEvents()
+    screen = window.screens[index][1]
+    for label in screen.findChildren(QtWidgets.QLabel):
+        if not label.isHidden() and label.text() and not label.wordWrap():
+            need = label.sizeHint()
+            if need.height() > label.height() + 1:
+                clipped.append(f"{window.screens[index][0]}: "
+                               f"{label.text()[:30]!r}")
+check("nothing is clipped at the largest size", clipped, [])
+
+# A window can never be narrower than its widest UNWRAPPED label, so one long
+# unwrapped sentence silently sets a floor on the whole app - the Balance Sheet
+# note was forcing 1788px, which is wider than a 1366px laptop screen and grew
+# with every text step. Guard the floor rather than the individual labels.
+WIDTH_CEILING = 1400
+too_wide = {name: screen.minimumSizeHint().width()
+            for name, screen in window.screens
+            if screen.minimumSizeHint().width() > WIDTH_CEILING}
+check(f"no screen demands over {WIDTH_CEILING}px at the largest size",
+      too_wide, {})
+print("       screen minimum widths: "
+      + ", ".join(f"{name.replace('&&', '&')} {screen.minimumSizeHint().width()}"
+                  for name, screen in window.screens))
+
+# And the window must not open bigger than the display it is on.
+avail = QtGui.QGuiApplication.primaryScreen().availableGeometry().size()
+want = window._sized_to_text()
+check("the window fits the screen at the largest size",
+      want.width() <= max(avail.width(), window.minimumSizeHint().width())
+      and want.height() <= max(avail.height(), window.minimumSizeHint().height()),
+      True)
+
+widths, scales = [], []
+for key in theme.TEXT_ORDER:
+    window.set_text_size(key)
+    settle()
+    widths.append(window._sized_to_text().width())
+    scales.append(theme.text_scale())
+window.set_text_size("largest")
+
+# The intent - bigger text asks for a bigger window - is the scale, which is
+# environment-free. The realised width can only be non-decreasing, because it
+# is clamped to the display and raised to the layout minimum: on a small
+# screen (this test runs on an 800x800 offscreen one) every step lands on the
+# same clamped size, which is correct rather than a failure.
+check("each step asks for a larger window", scales, sorted(set(scales)))
+check("the window never shrinks as text grows",
+      widths, sorted(widths))
+print("       scale " + " -> ".join(f"{s:.2f}" for s in scales)
+      + " | width " + " -> ".join(f"{w}px" for w in widths))
+
+for index in range(len(window.screens)):
+    window.show_screen(index)
+    QtWidgets.QApplication.processEvents()
+    screen = window.screens[index][1]
+    fits = window.width() >= screen.minimumSizeHint().width()
+    check(f"{window.screens[index][0]} fits the window at largest size",
+          fits, True)
+
+# Back to the default, and the books still add up after all that.
+window.set_text_size(theme.DEFAULT_TEXT)
+check("text size returns to the default",
+      QtWidgets.QApplication.font().pointSize(), base_pt)
+check("the balance sheet still balances",
+      acc.balance_sheet()["totals"]["difference"], 0.0, tol=0.0)
 
 print("\n" + ("ALL DESKTOP CHECKS PASSED" if not FAILURES
              else f"FAILURES: {FAILURES}"))

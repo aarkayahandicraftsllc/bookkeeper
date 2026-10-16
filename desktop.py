@@ -16,10 +16,12 @@ type the way Tally's do. Keyboard map follows Tally where it sensibly can:
     F2                set the voucher date
     Esc               back to voucher entry
     Ctrl+Shift+1..5   colour scheme (also under Settings > Colour scheme)
+    Ctrl+= / Ctrl+-   text bigger / smaller (Settings > Text size)
 
-Colours live in ``theme.py``, never inline here: the scheme is switchable at
-runtime, so a hardcoded ``#666`` would be unreadable the moment someone picks
-a dark one.
+Colours and text sizes live in ``theme.py``, never inline here: both are
+switchable at runtime, so a hardcoded ``#666`` would be unreadable the moment
+someone picks a dark scheme, and a hardcoded point size would ignore the text
+setting. Build fonts with ``mono_font()`` / ``heading()``, not ``QFont(...)``.
 """
 
 from __future__ import annotations
@@ -102,7 +104,7 @@ class FrameTable(QtWidgets.QTableWidget):
                     item = QtWidgets.QTableWidgetItem(text)
                     item.setTextAlignment(QtCore.Qt.AlignRight
                                           | QtCore.Qt.AlignVCenter)
-                    item.setFont(QtGui.QFont(MONO))
+                    item.setFont(mono_font())
                 else:
                     item = QtWidgets.QTableWidgetItem(
                         "" if pd.isna(raw) else str(raw))
@@ -120,12 +122,47 @@ class FrameTable(QtWidgets.QTableWidget):
             header.setSectionResizeMode(widest, QtWidgets.QHeaderView.Stretch)
 
 
-def heading(text: str, size: int = 15) -> QtWidgets.QLabel:
+def mono_font() -> QtGui.QFont:
+    """A monospaced font AT THE CURRENT TEXT SIZE.
+
+    ``QFont(MONO)`` does not inherit the application font's size - it comes
+    back at a system default of 12pt - so building one without passing a size
+    leaves the amount columns ignoring the text-size setting, and looking
+    smaller than their surroundings once the body text grows.
+    """
+    return QtGui.QFont(MONO, theme.point_size())
+
+
+def apply_mono(widget) -> None:
+    """Give a widget the monospaced font and mark it, so a later text-size
+    change can find it again."""
+    widget.setFont(mono_font())
+    widget.setProperty("mono", True)
+
+
+def flowing(label: QtWidgets.QLabel) -> QtWidgets.QLabel:
+    """A label that WRAPS rather than pinning the window open.
+
+    An unwrapped label's minimum width is the width of its entire text, and a
+    window can never be narrower than its widest unwrapped label. The report
+    captions carry long sentences and formatted figures, so left unwrapped they
+    forced the window wider at every step of text size - one of them was
+    demanding 1770px on its own. Use this for anything whose text is set at
+    refresh and could run long.
+    """
+    label.setWordWrap(True)
+    return label
+
+
+def heading(text: str, size: int | None = None) -> QtWidgets.QLabel:
     label = QtWidgets.QLabel(text)
     font = label.font()
-    font.setPointSize(size)
+    font.setPointSize(size if size else theme.heading_point_size())
     font.setBold(True)
     label.setFont(font)
+    # Marked so a text-size change can resize it: the point size is set here,
+    # once, which means it would otherwise never follow the application font.
+    label.setProperty("heading", True)
     return label
 
 
@@ -159,7 +196,7 @@ def totals_bar(*pairs: tuple[str, str]) -> QtWidgets.QWidget:
     layout.addStretch(1)
     for label, value in pairs:
         cell = QtWidgets.QLabel(f"{label}  <b>{value}</b>")
-        cell.setFont(QtGui.QFont(MONO))
+        apply_mono(cell)
         layout.addWidget(cell)
         layout.addSpacing(18)
     return box
@@ -349,10 +386,10 @@ class VoucherScreen(QtWidgets.QWidget):
         head.addWidget(self.date_edit)
 
         self.number_label = QtWidgets.QLabel()
-        self.number_label.setFont(QtGui.QFont(MONO))
+        apply_mono(self.number_label)
         head.addWidget(self.number_label)
         head.addStretch(1)
-        self.hint = QtWidgets.QLabel()
+        self.hint = flowing(QtWidgets.QLabel())
         muted(self.hint)
         head.addWidget(self.hint)
         layout.addLayout(head)
@@ -390,7 +427,7 @@ class VoucherScreen(QtWidgets.QWidget):
         self.cr_label = QtWidgets.QLabel()
         self.gap_label = QtWidgets.QLabel()
         for widget in (self.dr_label, self.cr_label, self.gap_label):
-            widget.setFont(QtGui.QFont(MONO))
+            apply_mono(widget)
             buttons.addWidget(widget)
             buttons.addSpacing(14)
         layout.addLayout(buttons)
@@ -441,7 +478,7 @@ class VoucherScreen(QtWidgets.QWidget):
         for col, value in ((1, debit), (2, credit)):
             item = QtWidgets.QTableWidgetItem("" if not value else f"{value:,.2f}")
             item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-            item.setFont(QtGui.QFont(MONO))
+            item.setFont(mono_font())
             self.grid.setItem(row, col, item)
         self._recalculate()
 
@@ -705,7 +742,7 @@ class DayBookScreen(QtWidgets.QWidget):
         self.type_filter.currentTextChanged.connect(self.refresh)
         filters.addWidget(self.type_filter)
         filters.addStretch(1)
-        self.count = QtWidgets.QLabel()
+        self.count = flowing(QtWidgets.QLabel())
         filters.addWidget(self.count)
         layout.addLayout(filters)
 
@@ -755,7 +792,7 @@ class LedgerScreen(QtWidgets.QWidget):
         self.period.changed.connect(self.refresh)
         layout.addWidget(self.period)
 
-        self.caption = QtWidgets.QLabel()
+        self.caption = flowing(QtWidgets.QLabel())
         layout.addWidget(self.caption)
         self.table = FrameTable()
         self.table.doubleClicked.connect(self._open)
@@ -820,7 +857,7 @@ class TrialBalanceScreen(QtWidgets.QWidget):
         self.by_group = QtWidgets.QCheckBox("Summarise by group")
         self.by_group.toggled.connect(self.refresh)
         layout.addWidget(self.by_group)
-        self.status = QtWidgets.QLabel()
+        self.status = flowing(QtWidgets.QLabel())
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.table = FrameTable()
@@ -862,7 +899,7 @@ class ProfitLossScreen(QtWidgets.QWidget):
         self.period.changed.connect(self.refresh)
         layout.addWidget(self.period)
 
-        self.trading_label = QtWidgets.QLabel()
+        self.trading_label = flowing(QtWidgets.QLabel())
         layout.addWidget(self.trading_label)
         trading = QtWidgets.QHBoxLayout()
         self.trading_expense = FrameTable()
@@ -870,10 +907,10 @@ class ProfitLossScreen(QtWidgets.QWidget):
         trading.addWidget(self.trading_expense)
         trading.addWidget(self.trading_income)
         layout.addLayout(trading, 1)
-        self.gross_label = QtWidgets.QLabel()
+        self.gross_label = flowing(QtWidgets.QLabel())
         layout.addWidget(self.gross_label)
 
-        self.pl_label = QtWidgets.QLabel()
+        self.pl_label = flowing(QtWidgets.QLabel())
         layout.addWidget(self.pl_label)
         indirect = QtWidgets.QHBoxLayout()
         self.indirect_expense = FrameTable()
@@ -881,7 +918,7 @@ class ProfitLossScreen(QtWidgets.QWidget):
         indirect.addWidget(self.indirect_expense)
         indirect.addWidget(self.indirect_income)
         layout.addLayout(indirect, 1)
-        self.net_label = QtWidgets.QLabel()
+        self.net_label = flowing(QtWidgets.QLabel())
         layout.addWidget(self.net_label)
 
     def refresh(self) -> None:
@@ -928,26 +965,32 @@ class BalanceSheetScreen(QtWidgets.QWidget):
         self.period = PeriodBar(with_from=False)
         self.period.changed.connect(self.refresh)
         layout.addWidget(self.period)
-        self.status = QtWidgets.QLabel()
+        self.status = flowing(QtWidgets.QLabel())
         layout.addWidget(self.status)
 
         sides = QtWidgets.QHBoxLayout()
         left = QtWidgets.QVBoxLayout()
-        self.liability_label = QtWidgets.QLabel()
+        self.liability_label = flowing(QtWidgets.QLabel())
         self.liabilities = FrameTable()
         left.addWidget(self.liability_label)
         left.addWidget(self.liabilities)
         right = QtWidgets.QVBoxLayout()
-        self.asset_label = QtWidgets.QLabel()
+        self.asset_label = flowing(QtWidgets.QLabel())
         self.assets = FrameTable()
         right.addWidget(self.asset_label)
         right.addWidget(self.assets)
         sides.addLayout(left)
         sides.addLayout(right)
         layout.addLayout(sides, 1)
-        layout.addWidget(QtWidgets.QLabel(
+        # Wrapped, and muted like every other piece of guidance. Unwrapped, a
+        # sentence this long sets the window's MINIMUM width to the width of
+        # the sentence - it was forcing 1770px, so the window could not be made
+        # narrower than that and grew worse with every step of text size.
+        note = QtWidgets.QLabel(
             "Profit & Loss A/c carries the net profit from the start of the "
-            "books to this date. Nominal ledgers are closed into it."))
+            "books to this date. Nominal ledgers are closed into it.")
+        note.setWordWrap(True)
+        layout.addWidget(muted(note))
 
     def refresh(self) -> None:
         _, as_at = self.period.range()
@@ -1121,16 +1164,22 @@ class MainWindow(QtWidgets.QMainWindow):
         db.init_db()
 
         # Before any widget is built, so nothing is created under the wrong
-        # palette. Read from the books, so the choice survives a restart and is
-        # the same whichever machine opens this data file.
+        # palette or at the wrong size. Read from the books, so both choices
+        # survive a restart and are the same whichever machine opens this file.
         app = QtWidgets.QApplication.instance()
         if app is not None:
             theme.remember_native_style(app)
+            theme.remember_base_font(app)
             theme.apply(app, db.get_setting(theme.SETTING_KEY, theme.DEFAULT))
+            theme.apply_font(
+                app, db.get_setting(theme.FONT_SETTING_KEY, theme.DEFAULT_TEXT))
 
         company = db.get_setting("company_name", "My Company")
         self.setWindowTitle(f"{company} — Bookkeeper")
-        self.resize(1180, 760)
+        # The window grows with the text. At a larger size the same 1180x760
+        # would simply push the lower half of a screen out of view, which is
+        # the opposite of making anything easier to read.
+        self.resize(self._sized_to_text())
 
         self.stack = QtWidgets.QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -1208,6 +1257,41 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addAction(refresh)
 
         settings_menu = bar.addMenu("&Settings")
+
+        size_menu = settings_menu.addMenu("&Text size")
+        saved_text = theme.resolve_text(
+            db.get_setting(theme.FONT_SETTING_KEY, theme.DEFAULT_TEXT))
+        self._text_group = QtGui.QActionGroup(self)
+        self._text_group.setExclusive(True)
+        self._text_actions = {}
+        for key in theme.TEXT_ORDER:
+            action = QtGui.QAction(theme.TEXT_LABELS[key], self, checkable=True)
+            action.setChecked(key == saved_text)
+            action.triggered.connect(
+                lambda _=False, k=key: self.set_text_size(k))
+            self._text_group.addAction(action)
+            size_menu.addAction(action)
+            self._text_actions[key] = action
+
+        # The familiar zoom keys, so you can nudge it while reading rather
+        # than going back to the menu.
+        size_menu.addSeparator()
+        for label, shortcut, delta in (("Bigger", "Ctrl+=", 1),
+                                       ("Smaller", "Ctrl+-", -1)):
+            action = QtGui.QAction(label, self)
+            action.setShortcut(QtGui.QKeySequence(shortcut))
+            action.triggered.connect(
+                lambda _=False, d=delta: self.step_text_size(d))
+            size_menu.addAction(action)
+            self.addAction(action)
+        # Ctrl++ as well: on many layouts that is what Ctrl and the plus key
+        # actually sends, and only Ctrl+= is bound above.
+        plus = QtGui.QAction("Bigger", self)
+        plus.setShortcut(QtGui.QKeySequence("Ctrl++"))
+        plus.triggered.connect(lambda: self.step_text_size(1))
+        self.addAction(plus)
+
+        settings_menu.addSeparator()
         scheme_menu = settings_menu.addMenu("&Colour scheme")
         saved = db.get_setting(theme.SETTING_KEY, theme.DEFAULT)
         self._scheme_group = QtGui.QActionGroup(self)
@@ -1248,6 +1332,75 @@ class MainWindow(QtWidgets.QMainWindow):
             token = label.property("tone")
             if token:
                 label.setStyleSheet(theme.fg(token))
+
+    # --- text size ------------------------------------------------------- #
+    BASE_WIDTH = 1180
+    BASE_HEIGHT = 760
+
+    def _sized_to_text(self) -> QtCore.QSize:
+        """The window size for the active text size.
+
+        Grows with the text, but never past the display: at the largest step
+        the scaled size came to 1967x1267, which is taller than a 1080p screen
+        and would have put the Accept button under the taskbar. Clamped to the
+        available desktop, then raised to whatever the layout genuinely needs.
+        """
+        scale = theme.text_scale()
+        size = QtCore.QSize(round(self.BASE_WIDTH * scale),
+                            round(self.BASE_HEIGHT * scale))
+        screen = self.screen() or QtGui.QGuiApplication.primaryScreen()
+        if screen is not None:
+            size = size.boundedTo(screen.availableGeometry().size())
+        return size.expandedTo(self.minimumSizeHint())
+
+    def step_text_size(self, delta: int) -> None:
+        """Move one step up or down the list, stopping at the ends."""
+        order = list(theme.TEXT_ORDER)
+        index = order.index(theme.active_text()) + delta
+        index = max(0, min(len(order) - 1, index))
+        self.set_text_size(order[index])
+
+    def set_text_size(self, key: str) -> None:
+        """Resize the text, then make the layout follow it.
+
+        Setting the application font is only half the job. Three kinds of thing
+        do not follow it on their own and are fixed up here:
+
+        * widgets whose point size was set once in a constructor - the screen
+          headings and the monospaced amount labels, marked with the "heading"
+          and "mono" properties when they were built;
+        * table rows and columns, whose measured heights and widths were taken
+          against the old metrics;
+        * the window itself, which would otherwise keep a size chosen for
+          smaller text and push the bottom of the screen out of view.
+        """
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        theme.apply_font(app, key)
+        key = theme.active_text()
+        db.set_setting(theme.FONT_SETTING_KEY, key)
+        if key in self._text_actions:
+            self._text_actions[key].setChecked(True)
+
+        for widget in self.findChildren(QtWidgets.QWidget):
+            if widget.property("heading"):
+                font = widget.font()
+                font.setPointSize(theme.heading_point_size())
+                widget.setFont(font)
+            elif widget.property("mono"):
+                widget.setFont(mono_font())
+
+        # Rebuilds every table against the new metrics, which re-fonts the
+        # amount items and re-measures the columns.
+        self.refresh_all()
+        for table in self.findChildren(QtWidgets.QTableWidget):
+            table.resizeRowsToContents()
+
+        if not (self.isMaximized() or self.isFullScreen()):
+            self.resize(self._sized_to_text())
+        self.statusBar().showMessage(
+            f"Text size: {theme.TEXT_LABELS[key]} ({theme.point_size()}pt)")
 
     def _masters_changed(self) -> None:
         """A master was created mid-voucher: refresh everything but the grid."""

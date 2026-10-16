@@ -28,6 +28,38 @@ DEFAULT = "light"
 
 SETTING_KEY = "color_scheme"
 
+# --------------------------------------------------------------------------- #
+# text size
+# --------------------------------------------------------------------------- #
+# Point sizes are expressed as a STEP above whatever the platform's own default
+# is, not as absolutes: that default is 9pt on this machine but differs across
+# Windows display settings, and a scheme that hardcoded "11pt" would be the
+# wrong size on half of them.
+FONT_SETTING_KEY = "text_size"
+
+TEXT_STEPS = {"normal": 0, "large": 2, "larger": 4, "largest": 6}
+TEXT_ORDER = ("normal", "large", "larger", "largest")
+TEXT_LABELS = {
+    "normal": "Normal",
+    "large": "Large",
+    "larger": "Larger",
+    "largest": "Largest",
+}
+
+# The default is one step UP: the user asked for "fonts a little bigger for
+# ease" 2026-10-16, so bigger is the out-of-the-box state and Normal is there
+# for anyone who wants the platform size back.
+DEFAULT_TEXT = "large"
+
+# How much larger a screen heading is than body text. Kept as a GAP rather than
+# a multiplier so headings stay proportionate at every step - the original was
+# 15pt against a 9pt body.
+HEADING_STEP = 6
+
+_base_point = 0
+_base_family = ""
+_active_text = DEFAULT_TEXT
+
 
 @dataclass(frozen=True)
 class Scheme:
@@ -304,6 +336,71 @@ def remember_native_style(app) -> None:
     global _native_style
     if not _native_style:
         _native_style = app.style().objectName()
+
+
+def remember_base_font(app) -> None:
+    """Record the platform's own font, before anything resizes it.
+
+    Every step is measured from here, so switching back to Normal returns to
+    the exact size the app had before any of this existed - and stepping up
+    twice in a row cannot compound.
+    """
+    global _base_point, _base_family
+    if not _base_point:
+        font = app.font()
+        _base_family = font.family()
+        _base_point = font.pointSize() if font.pointSize() > 0 else 9
+
+
+def resolve_text(key: str) -> str:
+    """A stored text-size preference, or the default if it is not one of ours."""
+    key = (key or "").strip().lower()
+    return key if key in TEXT_STEPS else DEFAULT_TEXT
+
+
+def apply_font(app, key: str) -> int:
+    """Set the application font for a text size. Returns the point size used."""
+    global _active_text
+    remember_base_font(app)
+    _active_text = resolve_text(key)
+
+    from PySide6 import QtGui
+
+    size = max(_base_point + TEXT_STEPS[_active_text], 6)
+    font = QtGui.QFont(_base_family)
+    font.setPointSize(size)
+    app.setFont(font)
+    return size
+
+
+def active_text() -> str:
+    return _active_text
+
+
+def point_size() -> int:
+    """Body text size for the active step.
+
+    Anything building a font by hand must ask for this. ``QFont(family)`` does
+    NOT follow the application font - it comes back at a system default of
+    12pt - so a hand-built font ignores the setting entirely unless its size is
+    passed in explicitly. That is exactly what left the monospaced amount
+    columns stuck at 12pt.
+    """
+    return max((_base_point or 9) + TEXT_STEPS[_active_text], 6)
+
+
+def heading_point_size() -> int:
+    return point_size() + HEADING_STEP
+
+
+def text_scale() -> float:
+    """Active size as a multiple of the platform default.
+
+    Used to grow the window with the text, so a bigger font does not simply
+    push the lower half of a screen out of view.
+    """
+    base = _base_point or 9
+    return point_size() / base
 
 
 def active() -> Scheme:

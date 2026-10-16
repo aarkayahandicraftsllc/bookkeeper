@@ -30,6 +30,38 @@ Tally for data entry. The desktop app is for entry; use either for reports.
 | `F11` | Refresh every report |
 | `Esc` | Back to voucher entry |
 | `Ctrl+Shift+1` … `Ctrl+Shift+5` | Colour scheme |
+| `Ctrl+=` / `Ctrl+-` | Text bigger / smaller |
+
+## Text size
+
+**Settings › Text size** — Normal, Large, Larger, Largest — or nudge it with
+`Ctrl+=` and `Ctrl+-` while you are reading. Saved in the books as `text_size`,
+alongside the colour scheme.
+
+**Large is the default**, two points above the platform size. Sizes are held as
+a *step* above whatever your Windows display setting gives, not as absolute
+point sizes, so Normal is always exactly the platform's own size on any machine.
+
+The layout follows the size, which took more than setting the application font.
+Three kinds of thing do not follow it by themselves:
+
+* **Fonts built by hand.** `QFont(family)` does **not** inherit the application
+  font's size — it comes back at a system default of 12pt. That left the
+  monospaced amount columns pinned at 12pt, so they would have looked *smaller*
+  than their own labels once the body text grew. Build them with `mono_font()`
+  and headings with `heading()`, never `QFont(...)` directly.
+* **Widgets whose point size was set once in a constructor** — the screen
+  headings and the mono labels. They are marked with a `heading` / `mono`
+  property when built, and `set_text_size` finds them again and re-fonts them.
+* **The window.** It grows with the text, clamped to the display, so a larger
+  font does not push the Accept button under the taskbar.
+
+**Long labels must wrap.** A window can never be narrower than its widest
+*unwrapped* label, so one long sentence silently sets a floor for the whole
+app — the Balance Sheet note was demanding 1770px, wider than a 1366px laptop
+screen, and grew with every step. Report captions go through `flowing()`, which
+wraps them. `test_desktop.py` guards the floor: no screen may demand more than
+1400px at the largest size, and nothing may be clipped.
 
 ## Colour schemes
 
