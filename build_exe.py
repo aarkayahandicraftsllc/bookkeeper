@@ -39,6 +39,11 @@ def archive_current() -> Path | None:
     Named for when that build was MADE, not when it was archived, so the
     filenames line up with what you remember building. Returns the archive
     path, to put back if the new build fails.
+
+    Safe to do while the app is open: Windows permits renaming a running
+    executable, and the open copy keeps running from its file handle. It
+    cannot be DELETED until that process exits, which is why prune_previous()
+    tolerates a refusal.
     """
     current = DIST / EXE_NAME
     if not current.exists():
@@ -63,18 +68,35 @@ def prune_previous() -> None:
 
     The timestamp in the name sorts chronologically, so sorting by name is
     enough and does not depend on the files' own mtimes surviving a copy.
+
+    A failure here must never stop the build. An archive the user is still
+    RUNNING cannot be deleted on Windows - the app they launched from dist/ is
+    this very file, moved - and an unhandled PermissionError here once wiped
+    dist/ and left them with no executable at all. Skip it and say so; it will
+    be prunable next time.
     """
     if not PREVIOUS.exists():
         return
     archives = sorted(PREVIOUS.glob("Bookkeeper-*.exe"))
     for stale in archives[:-KEEP_PREVIOUS] if KEEP_PREVIOUS else archives:
-        stale.unlink()
-        print(f"Dropped older build: {stale.name}")
+        try:
+            stale.unlink()
+            print(f"Dropped older build: {stale.name}")
+        except OSError as error:
+            print(f"Could not drop {stale.name} ({error.strerror or error}) - "
+                  f"it is probably still running. Left in place.")
 
 
 def main() -> int:
-    kept = archive_current()
-    prune_previous()
+    # Keeping the old build is a convenience; failing to keep it must not cost
+    # you the new one. Anything unexpected here is reported and stepped over.
+    kept = None
+    try:
+        kept = archive_current()
+        prune_previous()
+    except OSError as error:
+        print(f"Could not archive the previous build ({error}) - "
+              f"continuing with the build.")
 
     for stale in ("build", "dist"):
         shutil.rmtree(HERE / stale, ignore_errors=True)
