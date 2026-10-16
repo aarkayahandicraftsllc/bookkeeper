@@ -1284,96 +1284,114 @@ class NewCompanyDialog(QtWidgets.QDialog):
 
 
 class CompanyPicker(QtWidgets.QDialog):
-    """Which set of books to open — shown at launch, and on F3.
+    """Which set of books to work in — a dropdown, over the open window.
 
-    Tally asks the same question on the way in, and for the same reason: the
-    answer decides which file every later figure comes from, so it is worth a
-    deliberate choice rather than a remembered default.
+    Shown just after the app appears, and again on F3. It opens OVER a running
+    window rather than in front of it, so the app is up and usable first and
+    the company already open is what the dropdown starts on.
+
+    It never creates anything by itself: *New company…* is a button you press.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, current=None):
         super().__init__(parent)
-        self.setWindowTitle("Select company — Bookkeeper")
+        self.setWindowTitle("Select company")
         self.chosen: Path | None = None
+        # Which company to start the dropdown on. Passed in rather than read
+        # from db.DB_PATH, because creating a company switches that - and the
+        # dropdown should show the books the window is displaying.
+        self.current = Path(current) if current else Path(db.DB_PATH)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(heading("Select company"))
         self.note = muted(flowing(QtWidgets.QLabel()))
         layout.addWidget(self.note)
 
-        self.table = QtWidgets.QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(
-            ["Company", "Data file", "Last changed"])
-        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-        self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setSectionResizeMode(
-            0, QtWidgets.QHeaderView.Stretch)
-        self.table.doubleClicked.connect(self._open)
-        layout.addWidget(self.table, 1)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Company"))
+        self.combo = QtWidgets.QComboBox()
+        self.combo.currentIndexChanged.connect(self._describe)
+        row.addWidget(self.combo, 1)
+        layout.addLayout(row)
+
+        self.detail = muted(flowing(QtWidgets.QLabel()))
+        layout.addWidget(self.detail)
+        layout.addStretch(1)
 
         buttons = QtWidgets.QHBoxLayout()
         new = QtWidgets.QPushButton("New company…")
+        new.setToolTip("Create another set of books")
         new.clicked.connect(self.create)
         buttons.addWidget(new)
         buttons.addStretch(1)
-        quit_button = QtWidgets.QPushButton("Quit")
-        quit_button.clicked.connect(self.reject)
+        cancel = QtWidgets.QPushButton("Cancel")
+        cancel.setToolTip("Stay in the company that is already open")
+        cancel.clicked.connect(self.reject)
         self.open_button = QtWidgets.QPushButton("Open")
         self.open_button.setDefault(True)
         self.open_button.clicked.connect(self._open)
-        buttons.addWidget(quit_button)
+        buttons.addWidget(cancel)
         buttons.addWidget(self.open_button)
         layout.addLayout(buttons)
 
         self.reload()
-        self.resize(640, 360)
+        self.resize(520, 240)
 
     def reload(self) -> None:
         companies = db.list_companies()
-        self.table.setRowCount(len(companies))
-        last = db.last_company()
+        self.combo.blockSignals(True)
+        self.combo.clear()
         select = 0
-        for row, company in enumerate(companies):
-            path = Path(company["path"])
-            changed = datetime.fromtimestamp(path.stat().st_mtime)
-            for column, text in enumerate((company["company_name"],
-                                           company["file"],
-                                           changed.strftime("%d/%m/%Y %H:%M"))):
-                self.table.setItem(row, column,
-                                   QtWidgets.QTableWidgetItem(text))
-            if last is not None and path.name == last.name:
-                select = row
-        self.table.resizeColumnsToContents()
-        self.table.horizontalHeader().setSectionResizeMode(
-            0, QtWidgets.QHeaderView.Stretch)
+        for index, company in enumerate(companies):
+            self.combo.addItem(
+                f"{company['company_name']}   ({company['file']})",
+                company["path"])
+            if company["file"] == self.current.name:
+                select = index          # the company the window is showing
+        self.combo.blockSignals(False)
         if companies:
-            self.table.selectRow(select)         # the one last opened
+            self.combo.setCurrentIndex(select)
             self.note.setText(
                 f"{len(companies)} "
                 f"compan{'y' if len(companies) == 1 else 'ies'} in "
-                f"{db.DATA_DIR}. The one you used last is selected.")
+                f"{db.DATA_DIR}.")
         else:
             self.note.setText(
-                f"No companies yet in {db.DATA_DIR}. Create one to begin.")
+                f"No companies in {db.DATA_DIR} yet. "
+                f"Use New company to add one.")
         self.open_button.setEnabled(bool(companies))
-        self.table.setFocus()
+        self._describe()
+        self.combo.setFocus()
 
-    def _selected(self) -> Path | None:
-        row = self.table.currentRow()
-        if row < 0 or row >= self.table.rowCount():
-            return None
-        return db.DATA_DIR / self.table.item(row, 1).text()
+    def _describe(self) -> None:
+        """Say what is actually in the company the dropdown is showing."""
+        path = self.selected()
+        if path is None:
+            self.detail.clear()
+            return
+        details = db.peek_company(path)
+        changed = datetime.fromtimestamp(path.stat().st_mtime)
+        parts = [f"{details['file']}",
+                 f"last changed {changed.strftime('%d/%m/%Y %H:%M')}"]
+        if details["gstin"]:
+            parts.append(f"GSTIN {details['gstin']}")
+        if path.name == self.current.name:
+            parts.append("open now")
+        self.detail.setText(" · ".join(parts))
+
+    def selected(self) -> Path | None:
+        data = self.combo.currentData()
+        return Path(data) if data else None
 
     def _open(self) -> None:
-        path = self._selected()
+        path = self.selected()
         if path is None:
             return
         self.chosen = path
         self.accept()
 
     def create(self) -> None:
+        """Only ever reached by pressing the button."""
         dialog = NewCompanyDialog(self)
         if dialog.exec() and dialog.created is not None:
             self.chosen = dialog.created
@@ -1517,8 +1535,13 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         db.init_db()
         # Set by "Switch company"; main() reads it after the window closes and
-        # comes back round to the picker.
+        # comes back round to open the chosen company.
         self.switch_requested = False
+        # The company THIS window is showing. Compared against rather than
+        # db.DB_PATH, because creating a company switches the data layer as a
+        # side effect - so db.DB_PATH can already have moved on while these
+        # screens still show the old books.
+        self.company_file = Path(db.DB_PATH)
 
         # Before any widget is built, so nothing is created under the wrong
         # palette or at the wrong size. Read from the books, so both choices
@@ -1787,25 +1810,60 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_title(self) -> None:
         self.setWindowTitle(f"{db.company_display_name()} — Bookkeeper")
 
-    def switch_company(self) -> None:
-        """Close these books and go back to the picker.
+    def ask_company(self) -> None:
+        """Offer the company dropdown over the open window.
 
-        Closing and reopening the window is deliberate: rebuilding eight
-        screens in place against a different database is a lot of state to get
-        right, and a voucher part-entered against the OLD company is exactly
-        the kind of thing that would survive it.
+        This is what runs just after launch, and on F3. Choosing the company
+        already open, or cancelling, simply leaves you where you are - only a
+        DIFFERENT company closes and reopens the window.
         """
-        if not self._confirm_leaving("Switch company"):
+        if db.DB_PINNED:
             return
-        self.switch_requested = True
-        self.close()
+        picker = CompanyPicker(self, current=self.company_file)
+        if not picker.exec() or picker.chosen is None:
+            self._stay()
+            return
+        chosen = Path(picker.chosen)
+        if chosen.name == self.company_file.name:
+            self._stay()
+            self.statusBar().showMessage(
+                f"Staying in {db.company_display_name()}")
+            return
+        self._open_company(chosen)
+
+    def switch_company(self) -> None:
+        """F3: the same dropdown, asked for deliberately."""
+        self.ask_company()
 
     def new_company(self) -> None:
         dialog = NewCompanyDialog(self)
         if not dialog.exec() or dialog.created is None:
+            self._stay()
             return
-        # create_company already switched the data layer to the new file, so
-        # the window must be rebuilt against it.
+        self._open_company(Path(dialog.created))
+
+    def _stay(self) -> None:
+        """Point the data layer back at the books this window is showing.
+
+        Needed because creating a company switches to it: if the user then
+        cancels, the window would be showing one company and every query would
+        be answering from another.
+        """
+        db.use_company(self.company_file)
+
+    def _open_company(self, path: Path) -> None:
+        """Leave these books and reopen the window on another company.
+
+        Closing and reopening is deliberate: rebuilding eight screens in place
+        against a different database is a lot of state to get right, and a
+        voucher part-entered against the OLD company is exactly the kind of
+        thing that would survive it.
+        """
+        if not self._confirm_leaving("Switch company"):
+            self._stay()
+            return
+        db.use_company(path)
+        db.remember_last_company(path)
         self.switch_requested = True
         self.close()
 
@@ -1887,57 +1945,35 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Balance Sheet until the opening balances agree.")
 
 
-def choose_company(app) -> Path | None:
-    """Ask which company to open. None means the user chose to quit.
-
-    The picker is dressed in the colours and text size of the company opened
-    last, read straight out of that file - otherwise a user on the dark scheme
-    at the largest size gets a small white dialog before their own app appears.
-    """
-    previous = db.last_company()
-    if previous is not None:
-        looks = db.peek_settings(
-            previous, (theme.SETTING_KEY, theme.FONT_SETTING_KEY))
-        theme.apply(app, looks.get(theme.SETTING_KEY, theme.DEFAULT))
-        theme.apply_font(app, looks.get(theme.FONT_SETTING_KEY,
-                                        theme.DEFAULT_TEXT))
-
-    picker = CompanyPicker()
-    if not db.company_files():
-        # Nothing to choose from on a fresh install: go straight to creating
-        # one rather than showing an empty list.
-        picker.create()
-        if picker.chosen is None and not picker.exec():
-            return None
-    elif not picker.exec():
-        return None
-    return picker.chosen
-
-
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("Bookkeeper")
     theme.remember_native_style(app)
     theme.remember_base_font(app)
 
-    # One pass per company opened. Switching company (F3) closes the window and
-    # comes back here, which is far safer than rebuilding every screen in place
-    # against a different database.
-    while True:
-        if db.DB_PINNED:
-            chosen = db.DB_PATH          # BOOKS_DB names the file: don't ask
-        else:
-            chosen = choose_company(app)
-            if chosen is None:
-                return 0
-            db.use_company(chosen)
-            db.remember_last_company(chosen)
+    # The app OPENS FIRST, on the company used last, and asks afterwards (user
+    # asked 2026-10-16). Nothing is created on the way in: a fresh install
+    # falls back to the default file, exactly as before this app knew about
+    # more than one company, so starting up never demands a company be made.
+    if not db.DB_PINNED:
+        db.use_company(db.startup_company())
 
+    ask_on_open = not db.DB_PINNED
+
+    # One pass per company opened. Switching closes the window and comes back
+    # here, which is far safer than rebuilding every screen in place against a
+    # different database.
+    while True:
         window = MainWindow()
         window.show()
+        if ask_on_open:
+            # After the window is up and painted, not before it.
+            QtCore.QTimer.singleShot(0, window.ask_company)
         app.exec()
         if db.DB_PINNED or not window.switch_requested:
             return 0
+        # A company was chosen; open it without asking all over again.
+        ask_on_open = False
 
 
 if __name__ == "__main__":

@@ -441,6 +441,24 @@ def remember_last_company(path) -> None:
         pass            # a preference, not data: losing it costs one click
 
 
+def startup_company() -> Path:
+    """Which company to have open when the window first appears.
+
+    The app opens on the company you used last and ASKS afterwards, rather than
+    holding the window back behind a dialog. With nothing to go on it falls
+    back to the default file - which is also what the app used before it knew
+    about more than one company, so a fresh install behaves as it always did
+    instead of demanding a company be created before anything can be seen.
+    """
+    remembered = last_company()
+    if remembered is not None:
+        return remembered
+    existing = company_files()
+    if existing:
+        return existing[0]
+    return DATA_DIR / "books.db"
+
+
 def last_company() -> Path | None:
     try:
         name = LAST_COMPANY_FILE.read_text(encoding="utf-8").strip()

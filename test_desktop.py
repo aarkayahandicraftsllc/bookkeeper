@@ -555,19 +555,21 @@ for name in ("Alpha Exports", "Beta Trading"):
     made.append(dialog.created)
 check("they are separate files", made[0] != made[1], True)
 
-picker = desktop.CompanyPicker()
-listed = [picker.table.item(r, 0).text() for r in range(picker.table.rowCount())]
-check("both companies are offered", sorted(set(listed)) [:2],
+picker = desktop.CompanyPicker(current=made[1])
+listed = [picker.combo.itemText(i) for i in range(picker.combo.count())]
+check("both companies are in the dropdown",
+      sorted(t.split("  ")[0] for t in listed)[:2],
       ["Alpha Exports", "Beta Trading"])
-check("the last one opened is preselected",
-      picker.table.item(picker.table.currentRow(), 1).text(),
-      Path(made[-1]).name)
+check("the dropdown starts on the company passed in",
+      Path(picker.combo.currentData()).name, Path(made[1]).name)
 check("the folder is named in the note", str(db.DATA_DIR) in picker.note.text(),
       True)
+check("the detail line marks the one already open",
+      "open now" in picker.detail.text(), True)
 
-picker.table.selectRow(
-    next(r for r in range(picker.table.rowCount())
-         if picker.table.item(r, 0).text() == "Alpha Exports"))
+picker.combo.setCurrentIndex(
+    next(i for i in range(picker.combo.count())
+         if Path(picker.combo.itemData(i)).name == Path(made[0]).name))
 picker._open()
 check("opening returns the chosen file",
       Path(picker.chosen).name, Path(made[0]).name)
@@ -580,9 +582,18 @@ check("the dialog says why", "name" in refused.status.text().lower(), True)
 
 # Switching closes the window and asks again; main() loops on this flag.
 check("the window does not start out switching", window.switch_requested, False)
+# The window remembers the file it was OPENED with. db.DB_PATH has moved on,
+# because creating the companies above switched it - and that difference is the
+# whole reason company_file exists.
+check("the window knows which company it is showing",
+      window.company_file, Path(TMP))
+check("even though the data layer has moved on",
+      Path(db.DB_PATH) != window.company_file, True)
+# With the file pinned, switching must do NOTHING at all - no dialog, no
+# switch. The unpinned path is covered in test_multi_company.py.
 window.switch_company()
-check("switch_company sets the flag", window.switch_requested, True)
-window.switch_requested = False
+check("switching is inert while the data file is pinned",
+      window.switch_requested, False)
 
 # A part-entered voucher must not be thrown away silently.
 window.show_screen(0)

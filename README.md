@@ -111,10 +111,16 @@ The Streamlit version is unaffected; it keeps its browser default.
 
 ## More than one company
 
-The desktop app **asks which company to open** when it starts: a list of the
-companies it finds, with the one you used last already selected, so Enter opens
-it. **New company…** on that dialog creates one. Inside the app, **F3**
-(Company ▸ Switch company) closes the books and asks again.
+**The app opens first, then asks.** It comes up on the company you used last,
+and a **Select company** dialog appears over the running window with a
+dropdown of the companies it found. Keep the one you are in (Cancel), pick
+another, or press **New company…**. Inside the app, **F3** (Company ▸ Switch
+company) brings the same dropdown back.
+
+Nothing is ever created on the way in. A fresh install opens the default
+`books.db` — exactly as the app behaved before it knew about more than one
+company — rather than demanding a company be created before you can see
+anything. Creating one is always a button you press.
 
 **Each company is its own database file** in `data/`, named after the company:
 
@@ -145,11 +151,16 @@ A few details worth knowing:
 * **Two companies may share a name**; the second file gets a `-2` suffix.
 * **Switching closes and reopens the window** rather than rebuilding eight
   screens against a different database. If a voucher is part-entered you are
-  warned first, since leaving discards it.
-* The picker opens in **the colours and text size of the company you used
-  last** — those settings live inside each company's file, so without this a
-  user on the dark scheme would get a small white dialog before their own app
-  appeared.
+  warned first, since leaving discards it. Choosing the company you are already
+  in does nothing at all.
+* Because the dialog opens **over a running window**, it simply inherits that
+  company's colours and text size — those settings live inside each company's
+  file, and a dialog shown *before* the window would have appeared in the
+  wrong ones.
+* The window remembers **which file it was opened with** (`company_file`), and
+  the dialog preselects from that rather than from `db.DB_PATH` — creating a
+  company switches the data layer as a side effect, so the two can differ for
+  a moment, and a cancel puts it back.
 * **Appearance and company details are per company.** Each file carries its own
   `color_scheme`, `text_size`, currency and financial year.
 * `BOOKS_DB` **pins the file and switches the picker off** — the test suites
