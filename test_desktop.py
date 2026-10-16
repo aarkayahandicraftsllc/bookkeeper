@@ -19,11 +19,12 @@ TMP = Path(tempfile.gettempdir()) / "bookkeeper_desktop_test.db"
 TMP.unlink(missing_ok=True)
 os.environ["BOOKS_DB"] = str(TMP)
 
-from PySide6 import QtWidgets  # noqa: E402
+from PySide6 import QtGui, QtWidgets  # noqa: E402
 
 import accounting as acc  # noqa: E402
 import db  # noqa: E402
 import desktop  # noqa: E402
+import theme  # noqa: E402
 
 FAILURES = []
 
@@ -259,6 +260,81 @@ check("balances agree with the shared accounting layer",
       acc.trial_balance()["difference"], acc.trial_balance()["difference"])
 check("balance sheet still balances",
       acc.balance_sheet()["totals"]["difference"], 0.0, tol=0.0)
+
+print("\n15) Colour schemes")
+
+
+def contrast(fg, bg):
+    """WCAG relative-contrast ratio between two #rrggbb colours."""
+    def luminance(value):
+        parts = [int(value[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+                  for c in parts]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    light, dark = sorted((luminance(fg), luminance(bg)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+# Every scheme must be legible. This is the check that makes adding a scheme
+# safe: a status line that carries meaning through colour is useless if you
+# cannot read it, and eyeballing the light one says nothing about the others.
+AA = 4.5
+worst = (None, 99.0)
+for key, scheme in theme.SCHEMES.items():
+    for token in theme.TOKENS:
+        for ground in ("window", "base"):
+            ratio = contrast(scheme.color(token), getattr(scheme, ground))
+            if ratio < worst[1]:
+                worst = (f"{key}.{token} on {ground}", ratio)
+check("every token in every scheme clears WCAG AA",
+      worst[1] >= AA, True)
+print(f"       tightest: {worst[0]} at {worst[1]:.2f}:1 (floor {AA})")
+
+check("the schemes offered are the ones the menu lists",
+      sorted(theme.ORDER), sorted(list(theme.SCHEMES) + [theme.AUTO]))
+check("every offered scheme has a label",
+      all(theme.LABELS.get(k) for k in theme.ORDER), True)
+check("an unknown saved value falls back rather than crashing",
+      theme.resolve("chartreuse").key, theme.DEFAULT)
+check("auto resolves to a real scheme",
+      theme.resolve(theme.AUTO).key in theme.SCHEMES, True)
+try:
+    theme.SCHEMES["light"].color("highlight")   # structural, not a token
+    raised = False
+except KeyError:
+    raised = True
+check("asking for a non-token colour raises rather than silently working",
+      raised, True)
+
+# Switching through every scheme on the live window, the way the menu does.
+for key in theme.ORDER:
+    window.set_color_scheme(key)
+    QtWidgets.QApplication.processEvents()
+    check(f"{key}: saved to the books", db.get_setting(theme.SETTING_KEY), key)
+    check(f"{key}: menu entry is ticked",
+          window._scheme_actions[key].isChecked(), True)
+    resolved = theme.resolve(key)
+    check(f"{key}: palette follows the scheme",
+          QtWidgets.QApplication.palette().color(
+              QtGui.QPalette.ColorRole.Window).name(), resolved.window)
+    # The status lines must have been recoloured, not left on the old scheme.
+    stale = [lbl.objectName() or lbl.text()[:24]
+             for lbl in window.findChildren(QtWidgets.QLabel)
+             if lbl.property("tone")
+             and resolved.color(lbl.property("tone")) not in lbl.styleSheet()]
+    check(f"{key}: no status line left on the old colour", stale, [])
+
+window.trial.refresh()
+check("a report run after switching uses the active scheme",
+      theme.active().color("warn") in window.trial.status.styleSheet()
+      or theme.active().color("good") in window.trial.status.styleSheet(),
+      True)
+
+window.set_color_scheme("light")
+check("back on light, the platform style is restored",
+      QtWidgets.QApplication.style().objectName().lower()
+      in (theme._native_style.lower(), ""), True)
 
 print("\n" + ("ALL DESKTOP CHECKS PASSED" if not FAILURES
              else f"FAILURES: {FAILURES}"))

@@ -29,6 +29,41 @@ Tally for data entry. The desktop app is for entry; use either for reports.
 | `F2` | Set the voucher date |
 | `F11` | Refresh every report |
 | `Esc` | Back to voucher entry |
+| `Ctrl+Shift+1` … `Ctrl+Shift+4` | Colour scheme |
+
+## Colour schemes
+
+**Settings › Colour scheme**, in the desktop app. Four choices:
+
+| Scheme | Looks like |
+| --- | --- |
+| **Light** | The default. Dark text on white, on the platform's own widget style. |
+| **Dark** | Dark grey ground, light text, with the status colours lifted so they stay readable. |
+| **Tally classic** | The DOS-era Tally screen: deep blue, cream text, cyan selection bar. |
+| **Follow Windows** | Matches the OS light/dark setting. |
+
+The choice is saved in the books (`color_scheme` in the `settings` table), so it
+survives a restart and travels with the data file. Switching repaints
+immediately — there is nothing to restart.
+
+Two things worth knowing if you add a scheme of your own in `theme.py`:
+
+* **Nothing hardcodes a colour outside `theme.py`.** Four status colours carry
+  meaning — a balanced voucher is green, out-of-balance red, a Tally-convention
+  warning amber, guidance muted — and each is a *token* looked up on the active
+  scheme. Previously they were hex literals, which is fine on white and
+  illegible on anything else.
+* **`test_desktop.py` measures contrast.** Every token in every scheme is
+  checked against both backgrounds it can appear on and must clear the WCAG AA
+  ratio of 4.5:1, so a new scheme cannot ship with an unreadable status line.
+  The tightest in the current set is 5.22:1.
+
+Light stays on the platform's native widget style, so it is identical to how the
+app has always looked; the other schemes use Qt's Fusion style, because the
+native Windows style paints from the OS theme and ignores the palette — a dark
+scheme on it would keep white table headers and buttons.
+
+The Streamlit version is unaffected; it keeps its browser default.
 
 ## Creating masters mid-voucher
 

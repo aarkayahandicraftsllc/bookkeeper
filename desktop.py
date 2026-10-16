@@ -11,10 +11,15 @@ every keystroke without a round trip, and function keys that switch voucher
 type the way Tally's do. Keyboard map follows Tally where it sensibly can:
 
     F4 Contra   F5 Payment   F6 Receipt   F7 Journal   F8 Sales   F9 Purchase
-    Ctrl+A      accept the voucher
-    Ctrl+1..7   jump between screens
-    F2          set the voucher date
-    Esc         back to voucher entry
+    Ctrl+A            accept the voucher
+    Ctrl+1..7         jump between screens
+    F2                set the voucher date
+    Esc               back to voucher entry
+    Ctrl+Shift+1..4   colour scheme (also under Settings > Colour scheme)
+
+Colours live in ``theme.py``, never inline here: the scheme is switchable at
+runtime, so a hardcoded ``#666`` would be unreadable the moment someone picks
+a dark one.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 import accounting as acc
 import db
+import theme
 
 MONO = "Consolas, 'Courier New', monospace"
 
@@ -123,6 +129,28 @@ def heading(text: str, size: int = 15) -> QtWidgets.QLabel:
     return label
 
 
+def muted(label: QtWidgets.QLabel) -> QtWidgets.QLabel:
+    """Guidance text, coloured by the active scheme.
+
+    Styled by object name rather than inline, because these labels are set up
+    once in a constructor and never written to again - the stylesheet repaints
+    them when the scheme changes, with nothing to re-run.
+    """
+    label.setObjectName("muted")
+    return label
+
+
+def tone(label: QtWidgets.QLabel, token: str) -> None:
+    """Colour a status label by MEANING - good, bad, warn, muted.
+
+    The token is also stored on the widget, so ``MainWindow._repaint_tones``
+    can recolour it after a scheme change without recomputing the report that
+    produced the message.
+    """
+    label.setProperty("tone", token)
+    label.setStyleSheet(theme.fg(token))
+
+
 def totals_bar(*pairs: tuple[str, str]) -> QtWidgets.QWidget:
     """A right-aligned row of label/value pairs, for report footers."""
     box = QtWidgets.QWidget()
@@ -166,7 +194,7 @@ class GroupDialog(QtWidgets.QDialog):
             "A sub-group inherits its parent's nature, so it lands on the same "
             "statement.")
         note.setWordWrap(True)
-        note.setStyleSheet("color: #666;")
+        muted(note)
         form.addRow(note)
 
         buttons = QtWidgets.QDialogButtonBox(
@@ -203,7 +231,7 @@ class LedgerDialog(QtWidgets.QDialog):
         # built before _load_groups(), which describes the chosen group into it
         self.note = QtWidgets.QLabel()
         self.note.setWordWrap(True)
-        self.note.setStyleSheet("color: #666;")
+        muted(self.note)
 
         under_row = QtWidgets.QHBoxLayout()
         self.group_box = QtWidgets.QComboBox()
@@ -325,7 +353,7 @@ class VoucherScreen(QtWidgets.QWidget):
         head.addWidget(self.number_label)
         head.addStretch(1)
         self.hint = QtWidgets.QLabel()
-        self.hint.setStyleSheet("color: #666;")
+        muted(self.hint)
         head.addWidget(self.hint)
         layout.addLayout(head)
 
@@ -452,8 +480,8 @@ class VoucherScreen(QtWidgets.QWidget):
         self.dr_label.setText(f"Dr {debit:,.2f}")
         self.cr_label.setText(f"Cr {credit:,.2f}")
         self.gap_label.setText(f"Difference {gap:,.2f}")
-        self.gap_label.setStyleSheet(
-            "color: #137333;" if abs(gap) <= 0.005 and debit > 0 else "color: #b3261e;")
+        tone(self.gap_label,
+             "good" if abs(gap) <= 0.005 and debit > 0 else "bad")
 
         balanced = abs(gap) <= 0.005 and debit > 0 and len(rows) >= 2
         distinct = len({r["ledger_id"] for r in rows}) >= 2
@@ -465,17 +493,17 @@ class VoucherScreen(QtWidgets.QWidget):
             self.notice.setText(
                 "Pick a ledger on each line, then put the amount under Debit or "
                 "Credit — never both on one line.")
-            self.notice.setStyleSheet("color: #666;")
+            tone(self.notice, "muted")
         elif not balanced or not distinct:
             self.notice.setText("Debit and credit must agree, across at least "
                                 "two different ledgers.")
-            self.notice.setStyleSheet("color: #b3261e;")
+            tone(self.notice, "bad")
         elif notes:
             self.notice.setText("ℹ️  " + "  ".join(notes))
-            self.notice.setStyleSheet("color: #8a6d00;")
+            tone(self.notice, "warn")
         else:
             self.notice.setText("Debit equals credit — ready to accept.")
-            self.notice.setStyleSheet("color: #137333;")
+            tone(self.notice, "good")
 
         # keep a spare blank line at the bottom, the way Tally does
         last = self.grid.rowCount() - 1
@@ -815,13 +843,13 @@ class TrialBalanceScreen(QtWidgets.QWidget):
 
         if abs(trial["difference"]) <= acc.EPS:
             self.status.setText("Debits equal credits.")
-            self.status.setStyleSheet("color: #137333;")
+            tone(self.status, "good")
         else:
             self.status.setText(
                 f"Out by {money(abs(trial['difference']))} — this is the "
                 "difference in opening balances, not a problem with any "
                 "voucher. Every voucher is forced to balance when accepted.")
-            self.status.setStyleSheet("color: #8a6d00;")
+            tone(self.status, "warn")
 
 
 class ProfitLossScreen(QtWidgets.QWidget):
@@ -932,11 +960,11 @@ class BalanceSheetScreen(QtWidgets.QWidget):
         self.assets.load(sheet["assets"], numeric=("Amount",))
         if abs(totals["difference"]) <= acc.EPS:
             self.status.setText("Both sides agree.")
-            self.status.setStyleSheet("color: #137333;")
+            tone(self.status, "good")
         else:
             self.status.setText("The two sides do not agree — that should be "
                                 "impossible, please report it.")
-            self.status.setStyleSheet("color: #b3261e;")
+            tone(self.status, "bad")
 
 
 class MastersScreen(QtWidgets.QWidget):
@@ -1091,6 +1119,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         db.init_db()
+
+        # Before any widget is built, so nothing is created under the wrong
+        # palette. Read from the books, so the choice survives a restart and is
+        # the same whichever machine opens this data file.
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            theme.remember_native_style(app)
+            theme.apply(app, db.get_setting(theme.SETTING_KEY, theme.DEFAULT))
+
         company = db.get_setting("company_name", "My Company")
         self.setWindowTitle(f"{company} — Bookkeeper")
         self.resize(1180, 760)
@@ -1169,6 +1206,48 @@ class MainWindow(QtWidgets.QMainWindow):
         refresh.setShortcut(QtGui.QKeySequence("F11"))
         refresh.triggered.connect(self.refresh_all)
         self.addAction(refresh)
+
+        settings_menu = bar.addMenu("&Settings")
+        scheme_menu = settings_menu.addMenu("&Colour scheme")
+        saved = db.get_setting(theme.SETTING_KEY, theme.DEFAULT)
+        self._scheme_group = QtGui.QActionGroup(self)
+        self._scheme_group.setExclusive(True)
+        self._scheme_actions = {}
+        for position, key in enumerate(theme.ORDER, start=1):
+            action = QtGui.QAction(theme.LABELS[key], self, checkable=True)
+            action.setChecked(key == saved)
+            action.setShortcut(QtGui.QKeySequence(f"Ctrl+Shift+{position}"))
+            action.triggered.connect(
+                lambda _=False, k=key: self.set_color_scheme(k))
+            self._scheme_group.addAction(action)
+            scheme_menu.addAction(action)
+            self._scheme_actions[key] = action
+
+    def set_color_scheme(self, key: str) -> None:
+        """Switch scheme, save it, and repaint what the stylesheet cannot.
+
+        The muted labels follow the stylesheet on their own. The status lines
+        do not - they were given a colour when a report last ran - so their
+        stored tone is re-applied here rather than recomputing every report.
+        """
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            theme.apply(app, key)
+        db.set_setting(theme.SETTING_KEY, key)
+        if key in self._scheme_actions:
+            self._scheme_actions[key].setChecked(True)
+        self._repaint_tones()
+        scheme = theme.active()
+        label = theme.LABELS.get(key, scheme.label)
+        if key == theme.AUTO:
+            label = f"{label} — {scheme.label} right now"
+        self.statusBar().showMessage(f"Colour scheme: {label}")
+
+    def _repaint_tones(self) -> None:
+        for label in self.findChildren(QtWidgets.QLabel):
+            token = label.property("tone")
+            if token:
+                label.setStyleSheet(theme.fg(token))
 
     def _masters_changed(self) -> None:
         """A master was created mid-voucher: refresh everything but the grid."""
