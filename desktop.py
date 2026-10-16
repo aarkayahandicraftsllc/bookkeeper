@@ -15,7 +15,7 @@ type the way Tally's do. Keyboard map follows Tally where it sensibly can:
     Ctrl+1..7         jump between screens
     F2                set the voucher date
     Esc               back to voucher entry
-    Ctrl+Shift+1..4   colour scheme (also under Settings > Colour scheme)
+    Ctrl+Shift+1..5   colour scheme (also under Settings > Colour scheme)
 
 Colours live in ``theme.py``, never inline here: the scheme is switchable at
 runtime, so a hardcoded ``#666`` would be unreadable the moment someone picks

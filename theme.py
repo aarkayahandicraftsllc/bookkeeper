@@ -116,11 +116,29 @@ SCHEMES: dict[str, Scheme] = {
         highlight_text="#000080",
         border="#6a6ac8",
     ),
+    "tallyprime": Scheme(
+        key="tallyprime",
+        label="TallyPrime light",
+        # Tally as it looks today: a light body rather than a blue ground, a
+        # blue-grey band behind the headers, and the yellow highlight row.
+        window="#eef2f7",
+        base="#ffffff",
+        alt_base="#dbe5f1",
+        text="#14213d",
+        muted="#515b70",
+        good="#13653a",
+        bad="#b3261e",
+        warn="#6b4e00",
+        highlight="#ffd400",
+        highlight_text="#1a1a1a",
+        border="#b8c6da",
+    ),
 }
 
 # Order shown in the Settings menu. AUTO last, since it is a rule rather than
-# a scheme.
-ORDER = ("light", "dark", "tally", AUTO)
+# a scheme. The two Tally schemes sit together: the DOS-era blue and the way
+# Tally looks today.
+ORDER = ("light", "dark", "tally", "tallyprime", AUTO)
 
 LABELS = {key: SCHEMES[key].label for key in SCHEMES} | {
     AUTO: "Follow Windows",

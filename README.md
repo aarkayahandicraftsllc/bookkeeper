@@ -29,18 +29,22 @@ Tally for data entry. The desktop app is for entry; use either for reports.
 | `F2` | Set the voucher date |
 | `F11` | Refresh every report |
 | `Esc` | Back to voucher entry |
-| `Ctrl+Shift+1` … `Ctrl+Shift+4` | Colour scheme |
+| `Ctrl+Shift+1` … `Ctrl+Shift+5` | Colour scheme |
 
 ## Colour schemes
 
-**Settings › Colour scheme**, in the desktop app. Four choices:
+**Settings › Colour scheme**, in the desktop app. Five choices:
 
 | Scheme | Looks like |
 | --- | --- |
 | **Light** | The default. Dark text on white, on the platform's own widget style. |
 | **Dark** | Dark grey ground, light text, with the status colours lifted so they stay readable. |
-| **Tally classic** | The DOS-era Tally screen: deep blue, cream text, cyan selection bar. |
+| **Tally classic** | The DOS-era Tally screen: deep blue `#000080`, cream text, cyan selection bar. |
+| **TallyPrime light** | Tally as it looks today: light body, a blue-grey band behind the headers, the yellow highlight row. |
 | **Follow Windows** | Matches the OS light/dark setting. |
+
+There are two Tally schemes because Tally has had two looks: the inky blue DOS
+screen of 4.5 through 9, and the light one TallyPrime uses now.
 
 The choice is saved in the books (`color_scheme` in the `settings` table), so it
 survives a restart and travels with the data file. Switching repaints
