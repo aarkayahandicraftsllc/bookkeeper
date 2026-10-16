@@ -15,6 +15,39 @@ import accounting as acc
 import db
 
 st.set_page_config(page_title="Bookkeeper", page_icon="📗", layout="wide")
+
+# --------------------------------------------------------------------------- #
+# which company
+# --------------------------------------------------------------------------- #
+# Chosen BEFORE anything is read, because every constant below and every query
+# after it comes from whichever file this picks. The desktop app asks at launch;
+# here it is a sidebar picker, since a browser tab has no launch moment and
+# Streamlit re-runs this script top to bottom on each interaction.
+#
+# Skipped entirely when BOOKS_DB pins the file: the test suites and anyone
+# pointing at a shared folder have already chosen, and a picker would override
+# them.
+if not db.DB_PINNED:
+    _companies = db.list_companies()
+    if _companies:
+        _files = [c["file"] for c in _companies]
+        _labels = {c["file"]: f"{c['company_name']}  ({c['file']})"
+                   for c in _companies}
+        _remembered = db.last_company()
+        _default = (_files.index(_remembered.name)
+                    if _remembered is not None and _remembered.name in _files
+                    else 0)
+        _picked = st.sidebar.selectbox(
+            "Company", _files, index=_default,
+            format_func=lambda f: _labels[f], key="company_file")
+        db.use_company(db.DATA_DIR / _picked)
+        st.sidebar.caption(f"{len(_companies)} "
+                           f"compan{'y' if len(_companies) == 1 else 'ies'} "
+                           f"in {db.DATA_DIR}")
+    st.sidebar.caption(
+        "New companies are created in the desktop app "
+        "(Company ▸ New company).")
+
 db.init_db()
 
 COMPANY = db.get_setting("company_name", "My Company")

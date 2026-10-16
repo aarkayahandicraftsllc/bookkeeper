@@ -6,6 +6,7 @@ Uses a throwaway database, so nothing real is touched.
 
 import os
 import sys
+import shutil
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -15,6 +16,13 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 TMP = Path(tempfile.gettempdir()) / "bookkeeper_test.db"
 TMP.unlink(missing_ok=True)
 os.environ["BOOKS_DB"] = str(TMP)
+# Company files are created in BOOKS_DIR, so point it at a scratch
+# folder: without this the suite would write companies into the
+# user's real data/ directory.
+SANDBOX = Path(tempfile.gettempdir()) / f"bookkeeper_sandbox_{TMP.stem}"
+shutil.rmtree(SANDBOX, ignore_errors=True)
+SANDBOX.mkdir(parents=True, exist_ok=True)
+os.environ["BOOKS_DIR"] = str(SANDBOX)
 
 import accounting as acc  # noqa: E402
 import db  # noqa: E402
@@ -396,6 +404,58 @@ try:
 except ValueError:
     pass
 check("a rejected save writes nothing", db.get_company(), before)
+
+print("\nMore than one company")
+# Each company is its own file, so the test is whether the books really are
+# separate - a ledger in one must not be visible in the other. Both are created
+# inside BOOKS_DIR; the database BOOKS_DB pins for this suite sits outside it
+# and is deliberately not a listed company.
+pinned = db.DB_PATH
+first = db.create_company({"company_name": "First Company"})
+shutil.copyfile(first, SANDBOX / "books.backup-20261014-204341.db")
+
+second = db.create_company({"company_name": "Second Company"})
+check("creating a company switches to it", db.DB_PATH, second)
+check("the new company has its own name",
+      db.get_company()["company_name"], "Second Company")
+db.add_ledger("Only In Second", "Indirect Expenses")
+
+db.use_company(first)
+check("the first company is unchanged",
+      db.get_company()["company_name"], "First Company")
+check("a ledger created in one is not in the other",
+      "Only In Second" in list(db.get_ledgers()["name"]), False)
+db.use_company(second)
+check("and it IS in its own company",
+      "Only In Second" in list(db.get_ledgers()["name"]), True)
+
+names = [c["company_name"] for c in db.list_companies()]
+check("both companies are listed", sorted(set(names)),
+      ["First Company", "Second Company"])
+check("a backup file is not listed as a company",
+      any("backup" in c["file"] for c in db.list_companies()), False)
+
+# Two companies may legitimately share a name; the files must not collide.
+third = db.create_company({"company_name": "Second Company"})
+check("a repeated name gets its own file", third != second, True)
+check("and it is readable", db.get_company()["company_name"], "Second Company")
+
+db.remember_last_company(first)
+check("the last company opened is remembered",
+      db.last_company().name, Path(first).name)
+
+before = sorted(p.name for p in db.company_files())
+try:
+    db.create_company({"company_name": "   "})
+    check("a company with no name is refused", "accepted", "rejected")
+except ValueError:
+    check("a company with no name is refused", "rejected", "rejected")
+check("and no file was left behind",
+      sorted(p.name for p in db.company_files()), before)
+
+check("peeking reads the name without opening it",
+      db.peek_company(first)["company_name"], "First Company")
+db.use_company(pinned)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAILURES else f"FAILURES: {FAILURES}"))
 raise SystemExit(1 if FAILURES else 0)

@@ -26,6 +26,7 @@ Tally for data entry. The desktop app is for entry; use either for reports.
 | `Ctrl+A` | Accept the voucher |
 | `Ctrl+1` … `Ctrl+8` | Jump between screens (`Ctrl+8` is Company) |
 | `Ctrl+S` | Save the company details, on that screen |
+| `F3` | Switch company |
 | `Alt+C` | Create a ledger from the line you are on |
 | `F2` | Set the voucher date |
 | `F11` | Refresh every report |
@@ -107,6 +108,56 @@ native Windows style paints from the OS theme and ignores the palette — a dark
 scheme on it would keep white table headers and buttons.
 
 The Streamlit version is unaffected; it keeps its browser default.
+
+## More than one company
+
+The desktop app **asks which company to open** when it starts: a list of the
+companies it finds, with the one you used last already selected, so Enter opens
+it. **New company…** on that dialog creates one. Inside the app, **F3**
+(Company ▸ Switch company) closes the books and asks again.
+
+**Each company is its own database file** in `data/`, named after the company:
+
+```
+data/aarkaya-handicrafts-llc.db
+data/shubh-traders.db
+data/books.db
+```
+
+That is how Tally keeps a company per data folder, and it is why the accounting
+code did not have to change: no query needed a company filter. It also means a
+company is backed up, copied or handed to someone by moving one file. The
+trade-off is no cross-company reporting — nothing in the app reports across
+companies anyway.
+
+**The folder is the list.** There is no index file to fall out of step with
+what is on disk, so dropping a company file into `data/` makes it appear and
+taking one out makes it vanish. Files with `backup`, `tmp` or `old` in the name
+are skipped, or the backup beside your books would show up as a second company
+with the same name.
+
+A few details worth knowing:
+
+* Creating a company asks only for **name, financial year, books-begin date and
+  currency** — enough to enter a voucher. Address, PAN and GSTIN are filled in
+  afterwards on the Company screen, rather than facing you with fifteen fields
+  before you can do anything.
+* **Two companies may share a name**; the second file gets a `-2` suffix.
+* **Switching closes and reopens the window** rather than rebuilding eight
+  screens against a different database. If a voucher is part-entered you are
+  warned first, since leaving discards it.
+* The picker opens in **the colours and text size of the company you used
+  last** — those settings live inside each company's file, so without this a
+  user on the dark scheme would get a small white dialog before their own app
+  appeared.
+* **Appearance and company details are per company.** Each file carries its own
+  `color_scheme`, `text_size`, currency and financial year.
+* `BOOKS_DB` **pins the file and switches the picker off** — the test suites
+  and anyone pointing at a shared folder have already chosen. `BOOKS_DIR` moves
+  the whole company folder.
+* The browser version has a **Company selector in the sidebar** instead, since
+  a browser tab has no launch moment. It creates nothing; use the desktop app
+  for that.
 
 ## Company details
 
@@ -236,10 +287,21 @@ else such as a OneDrive folder.
 ## Tests
 
 ```bash
-python test_books.py                              # the accounting, 92 checks
-python test_ui.py                                 # the Streamlit front end
+python test_books.py                               # the accounting
+python test_ui.py                                  # the Streamlit front end
 QT_QPA_PLATFORM=offscreen python test_desktop.py   # the desktop front end
+python test_multi_company.py                       # choosing a company
 ```
+
+The first three set `BOOKS_DB`, which pins the data file and switches the
+company picker off — so they cover everything *except* the way the app actually
+starts. `test_multi_company.py` runs unpinned, with `BOOKS_DIR` on a scratch
+folder, and drives the real launch path in both front ends: creating companies,
+that their books are genuinely separate, the picker's listing and preselection,
+switching, and that a backup file is not mistaken for a company.
+
+All four point `BOOKS_DIR` at a temporary folder, so no suite can write a
+company into your real `data/` directory.
 
 `test_books.py` works a full set of books by hand — opening balances, a credit
 sale part received, a credit purchase part paid, a contra, bank interest — and

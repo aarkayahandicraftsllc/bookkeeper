@@ -31,7 +31,27 @@ from pathlib import Path
 import pandas as pd
 
 APP_DIR = Path(__file__).resolve().parent
-DB_PATH = Path(os.environ.get("BOOKS_DB", APP_DIR / "data" / "books.db"))
+DATA_DIR = Path(os.environ.get("BOOKS_DIR", APP_DIR / "data"))
+DB_PATH = Path(os.environ.get("BOOKS_DB", DATA_DIR / "books.db"))
+
+# True when BOOKS_DB names the file explicitly. The company picker is then
+# skipped: a caller that pinned the file - the test suites, the Streamlit app,
+# anyone pointing at a shared folder - has already chosen, and asking again
+# would override them.
+DB_PINNED = "BOOKS_DB" in os.environ
+
+# Each company is its OWN database file, the way Tally keeps a company per data
+# folder. The alternative - one file with a company_id on every table - would
+# have put a scoping clause in every query in this module and in accounting.py,
+# for a feature that never needs to report across companies. Keeping them
+# separate also means a company is backed up, copied or handed over by moving
+# one file.
+LAST_COMPANY_FILE = DATA_DIR / ".last_company"
+
+# Filenames that live in the data folder but are NOT companies. The backup that
+# save-before-overwrite leaves behind is the one that matters: without this it
+# would appear in the picker as a second company with the same name.
+_NOT_COMPANIES = (".backup", ".tmp", ".old")
 
 NATURES = ("asset", "liability", "income", "expense")
 SIDES = ("Dr", "Cr")
@@ -298,6 +318,136 @@ def company_display_name() -> str:
     """The name to print: the mailing name if one is set, else the company."""
     company = get_company()
     return company["mailing_name"] or company["company_name"]
+
+
+# --------------------------------------------------------------------------- #
+# more than one company
+# --------------------------------------------------------------------------- #
+def company_files() -> list[Path]:
+    """Every company database in the data folder, newest first.
+
+    The folder IS the registry - there is no index file to fall out of step
+    with what is on disk, and dropping a company file in (or taking one away)
+    just works. Backups are filtered out by name.
+    """
+    if not DATA_DIR.exists():
+        return []
+    files = [path for path in DATA_DIR.glob("*.db")
+             if not any(mark in path.name.lower() for mark in _NOT_COMPANIES)
+             and not path.name.startswith(".")]
+    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def peek_settings(path, keys: tuple[str, ...]) -> dict[str, str]:
+    """Read settings out of a company file WITHOUT switching to it.
+
+    Opened read-only and defensively: anything may be sitting in the data
+    folder with a .db suffix, and a file we cannot read should come back empty
+    rather than stop the picker from opening.
+    """
+    found: dict[str, str] = {}
+    try:
+        conn = sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True)
+        try:
+            conn.row_factory = sqlite3.Row
+            marks = ", ".join("?" * len(keys))
+            rows = conn.execute(
+                f"SELECT key, value FROM settings WHERE key IN ({marks})",
+                keys).fetchall()
+            for row in rows:
+                found[row["key"]] = row["value"] or ""
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        pass
+    return found
+
+
+def peek_company(path: Path) -> dict[str, str]:
+    """A company's headline details, for the picker."""
+    wanted = ("company_name", "mailing_name", "gstin", "books_begin")
+    details = {key: "" for key in wanted}
+    details.update(peek_settings(path, wanted))
+    details["path"] = str(path)
+    details["file"] = path.name
+    if not details["company_name"]:
+        details["company_name"] = path.stem
+    return details
+
+
+def list_companies() -> list[dict[str, str]]:
+    return [peek_company(path) for path in company_files()]
+
+
+def company_filename(name: str) -> Path:
+    """A file name for a company, derived from its name and never colliding.
+
+    Derived rather than opaque so the data folder stays readable: you can tell
+    which file is which company without opening any of them.
+    """
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").lower() or "company"
+    candidate = DATA_DIR / f"{slug}.db"
+    serial = 2
+    while candidate.exists():
+        candidate = DATA_DIR / f"{slug}-{serial}.db"
+        serial += 1
+    return candidate
+
+
+def use_company(path) -> Path:
+    """Point every later query at this company's file.
+
+    ``connect()`` reads DB_PATH on each call, so reassigning it here is all
+    that switching takes - no connection is held open between calls.
+    """
+    global DB_PATH
+    DB_PATH = Path(path)
+    return DB_PATH
+
+
+def create_company(values: dict[str, str]) -> Path:
+    """Validate, make the file, seed the masters, store the details.
+
+    Switches to the new company on success. On failure the previous company is
+    restored, so a rejected name cannot leave the app pointing at a file that
+    was never set up.
+    """
+    cleaned = validate_company(values)          # before creating anything
+    previous = DB_PATH
+    path = company_filename(cleaned["company_name"])
+    try:
+        use_company(path)
+        init_db()
+        save_company(cleaned)
+    except Exception:
+        use_company(previous)
+        path.unlink(missing_ok=True)
+        raise
+    remember_last_company(path)
+    return path
+
+
+def remember_last_company(path) -> None:
+    """Note which company was opened, to preselect it next time.
+
+    Kept in a plain file beside the data rather than in a company database -
+    which company to open cannot be answered from inside one - and outside the
+    *.db scan so it is never mistaken for a company.
+    """
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        LAST_COMPANY_FILE.write_text(str(Path(path).name), encoding="utf-8")
+    except OSError:
+        pass            # a preference, not data: losing it costs one click
+
+
+def last_company() -> Path | None:
+    try:
+        name = LAST_COMPANY_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    candidate = DATA_DIR / name
+    return candidate if name and candidate.exists() else None
 
 
 # --------------------------------------------------------------------------- #

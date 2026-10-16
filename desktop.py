@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import calendar
 import sys
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 
 import pandas as pd
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -158,6 +159,38 @@ def fit_lines(widget) -> None:
     font.setPointSize(theme.point_size())
     metrics = QtGui.QFontMetrics(font)
     widget.setMinimumHeight(metrics.lineSpacing() * rows + 12)
+
+
+def editor_for(field) -> QtWidgets.QWidget:
+    """The right editor for a ``db.CompanyField``.
+
+    Shared by the Company screen and the create-company dialog, so the two
+    present the same field the same way.
+    """
+    if field.kind == "multiline":
+        editor = QtWidgets.QPlainTextEdit()
+        editor.setPlaceholderText(field.hint)
+        editor.setProperty("lines", 3)
+        fit_lines(editor)
+        return editor
+    if field.kind == "month":
+        editor = QtWidgets.QComboBox()
+        for month in range(1, 13):
+            editor.addItem(calendar.month_name[month], month)
+        return editor
+    if field.kind == "date":
+        editor = QtWidgets.QDateEdit()
+        editor.setCalendarPopup(True)
+        editor.setDisplayFormat("dd/MM/yyyy")
+        return editor
+    if field.kind == "choice":
+        editor = QtWidgets.QComboBox()
+        editor.setEditable(True)            # so an unlisted symbol still works
+        editor.addItems(list(field.choices))
+        return editor
+    editor = QtWidgets.QLineEdit()
+    editor.setPlaceholderText(field.hint)
+    return editor
 
 
 def flowing(label: QtWidgets.QLabel) -> QtWidgets.QLabel:
@@ -1176,6 +1209,178 @@ class MastersScreen(QtWidgets.QWidget):
 
 
 # --------------------------------------------------------------------------- #
+# choosing a company at launch
+# --------------------------------------------------------------------------- #
+# Only the fields needed to open a usable set of books. The rest - address,
+# PAN, GSTIN - are filled in afterwards on the Company screen, so creating a
+# company is not a fifteen-field form before you can enter a single voucher.
+NEW_COMPANY_FIELDS = ("company_name", "fy_start_month", "books_begin",
+                      "currency")
+
+
+class NewCompanyDialog(QtWidgets.QDialog):
+    """Create a company, which means creating its database file."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create a company")
+        self.created: Path | None = None
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(muted(flowing(QtWidgets.QLabel(
+            "Each company is a separate set of books, in its own file in the "
+            "data folder. Address, PAN and GSTIN can be filled in afterwards "
+            "on the Company screen."))))
+
+        form = QtWidgets.QFormLayout()
+        by_key = {field.key: field for field in db.COMPANY_FIELDS}
+        self.editors: dict[str, QtWidgets.QWidget] = {}
+        defaults = db.DEFAULT_SETTINGS
+        for key in NEW_COMPANY_FIELDS:
+            field = by_key[key]
+            editor = editor_for(field)
+            if key == "fy_start_month":
+                editor.setCurrentIndex(int(defaults.get(key, 4)) - 1)
+            elif key == "books_begin":
+                editor.setDate(to_qdate(date.today()))
+            elif key == "currency":
+                editor.setCurrentText(defaults.get(key, "₹"))
+            self.editors[key] = editor
+            form.addRow(field.label + (" *" if field.required else ""), editor)
+        layout.addLayout(form)
+
+        self.status = flowing(QtWidgets.QLabel())
+        layout.addWidget(self.status)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.button(QtWidgets.QDialogButtonBox.Ok).setText("Create")
+        buttons.accepted.connect(self._create)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.editors["company_name"].setFocus()
+
+    def values(self) -> dict[str, str]:
+        out = {}
+        for key, editor in self.editors.items():
+            if isinstance(editor, QtWidgets.QComboBox):
+                out[key] = (str(editor.currentData())
+                            if editor.currentData() is not None
+                            else editor.currentText())
+            elif isinstance(editor, QtWidgets.QDateEdit):
+                out[key] = from_qdate(editor.date()).isoformat()
+            else:
+                out[key] = editor.text()
+        return out
+
+    def _create(self) -> None:
+        try:
+            self.created = db.create_company(self.values())
+        except (ValueError, OSError) as exc:
+            self.status.setText(str(exc))
+            tone(self.status, "bad")
+            return
+        self.accept()
+
+
+class CompanyPicker(QtWidgets.QDialog):
+    """Which set of books to open — shown at launch, and on F3.
+
+    Tally asks the same question on the way in, and for the same reason: the
+    answer decides which file every later figure comes from, so it is worth a
+    deliberate choice rather than a remembered default.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select company — Bookkeeper")
+        self.chosen: Path | None = None
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(heading("Select company"))
+        self.note = muted(flowing(QtWidgets.QLabel()))
+        layout.addWidget(self.note)
+
+        self.table = QtWidgets.QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(
+            ["Company", "Data file", "Last changed"])
+        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.Stretch)
+        self.table.doubleClicked.connect(self._open)
+        layout.addWidget(self.table, 1)
+
+        buttons = QtWidgets.QHBoxLayout()
+        new = QtWidgets.QPushButton("New company…")
+        new.clicked.connect(self.create)
+        buttons.addWidget(new)
+        buttons.addStretch(1)
+        quit_button = QtWidgets.QPushButton("Quit")
+        quit_button.clicked.connect(self.reject)
+        self.open_button = QtWidgets.QPushButton("Open")
+        self.open_button.setDefault(True)
+        self.open_button.clicked.connect(self._open)
+        buttons.addWidget(quit_button)
+        buttons.addWidget(self.open_button)
+        layout.addLayout(buttons)
+
+        self.reload()
+        self.resize(640, 360)
+
+    def reload(self) -> None:
+        companies = db.list_companies()
+        self.table.setRowCount(len(companies))
+        last = db.last_company()
+        select = 0
+        for row, company in enumerate(companies):
+            path = Path(company["path"])
+            changed = datetime.fromtimestamp(path.stat().st_mtime)
+            for column, text in enumerate((company["company_name"],
+                                           company["file"],
+                                           changed.strftime("%d/%m/%Y %H:%M"))):
+                self.table.setItem(row, column,
+                                   QtWidgets.QTableWidgetItem(text))
+            if last is not None and path.name == last.name:
+                select = row
+        self.table.resizeColumnsToContents()
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.Stretch)
+        if companies:
+            self.table.selectRow(select)         # the one last opened
+            self.note.setText(
+                f"{len(companies)} "
+                f"compan{'y' if len(companies) == 1 else 'ies'} in "
+                f"{db.DATA_DIR}. The one you used last is selected.")
+        else:
+            self.note.setText(
+                f"No companies yet in {db.DATA_DIR}. Create one to begin.")
+        self.open_button.setEnabled(bool(companies))
+        self.table.setFocus()
+
+    def _selected(self) -> Path | None:
+        row = self.table.currentRow()
+        if row < 0 or row >= self.table.rowCount():
+            return None
+        return db.DATA_DIR / self.table.item(row, 1).text()
+
+    def _open(self) -> None:
+        path = self._selected()
+        if path is None:
+            return
+        self.chosen = path
+        self.accept()
+
+    def create(self) -> None:
+        dialog = NewCompanyDialog(self)
+        if dialog.exec() and dialog.created is not None:
+            self.chosen = dialog.created
+            self.accept()
+
+
+# --------------------------------------------------------------------------- #
 # company master
 # --------------------------------------------------------------------------- #
 class CompanyScreen(QtWidgets.QWidget):
@@ -1206,7 +1411,7 @@ class CompanyScreen(QtWidgets.QWidget):
             QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
         self.editors: dict[str, QtWidgets.QWidget] = {}
         for field in db.COMPANY_FIELDS:
-            editor = self._editor_for(field)
+            editor = editor_for(field)
             if field.hint:
                 editor.setToolTip(field.hint)
             self.editors[field.key] = editor
@@ -1240,32 +1445,6 @@ class CompanyScreen(QtWidgets.QWidget):
         self.addAction(action)
 
         self.refresh()
-
-    def _editor_for(self, field) -> QtWidgets.QWidget:
-        if field.kind == "multiline":
-            editor = QtWidgets.QPlainTextEdit()
-            editor.setPlaceholderText(field.hint)
-            editor.setProperty("lines", 3)
-            fit_lines(editor)
-            return editor
-        if field.kind == "month":
-            editor = QtWidgets.QComboBox()
-            for month in range(1, 13):
-                editor.addItem(calendar.month_name[month], month)
-            return editor
-        if field.kind == "date":
-            editor = QtWidgets.QDateEdit()
-            editor.setCalendarPopup(True)
-            editor.setDisplayFormat("dd/MM/yyyy")
-            return editor
-        if field.kind == "choice":
-            editor = QtWidgets.QComboBox()
-            editor.setEditable(True)        # so an unlisted symbol still works
-            editor.addItems(list(field.choices))
-            return editor
-        editor = QtWidgets.QLineEdit()
-        editor.setPlaceholderText(field.hint)
-        return editor
 
     def refresh(self) -> None:
         """Load what is saved, discarding any edits.
@@ -1337,6 +1516,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         db.init_db()
+        # Set by "Switch company"; main() reads it after the window closes and
+        # comes back round to the picker.
+        self.switch_requested = False
 
         # Before any widget is built, so nothing is created under the wrong
         # palette or at the wrong size. Read from the books, so both choices
@@ -1434,6 +1616,25 @@ class MainWindow(QtWidgets.QMainWindow):
         refresh.setShortcut(QtGui.QKeySequence("F11"))
         refresh.triggered.connect(self.refresh_all)
         self.addAction(refresh)
+
+        company_menu = bar.addMenu("&Company")
+        details = QtGui.QAction("Company details", self)
+        details.triggered.connect(
+            lambda: self.show_screen(len(self.screens) - 1))
+        company_menu.addAction(details)
+        company_menu.addSeparator()
+        switch = self._switch_action = QtGui.QAction("Switch company…\tF3", self)
+        switch.setShortcut(QtGui.QKeySequence("F3"))
+        switch.setEnabled(not db.DB_PINNED)
+        switch.setToolTip("Close these books and choose another company"
+                          if not db.DB_PINNED else
+                          "BOOKS_DB pins the data file for this session")
+        switch.triggered.connect(self.switch_company)
+        company_menu.addAction(switch)
+        new_company = QtGui.QAction("New company…", self)
+        new_company.setEnabled(not db.DB_PINNED)
+        new_company.triggered.connect(self.new_company)
+        company_menu.addAction(new_company)
 
         settings_menu = bar.addMenu("&Settings")
 
@@ -1586,6 +1787,50 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_title(self) -> None:
         self.setWindowTitle(f"{db.company_display_name()} — Bookkeeper")
 
+    def switch_company(self) -> None:
+        """Close these books and go back to the picker.
+
+        Closing and reopening the window is deliberate: rebuilding eight
+        screens in place against a different database is a lot of state to get
+        right, and a voucher part-entered against the OLD company is exactly
+        the kind of thing that would survive it.
+        """
+        if not self._confirm_leaving("Switch company"):
+            return
+        self.switch_requested = True
+        self.close()
+
+    def new_company(self) -> None:
+        dialog = NewCompanyDialog(self)
+        if not dialog.exec() or dialog.created is None:
+            return
+        # create_company already switched the data layer to the new file, so
+        # the window must be rebuilt against it.
+        self.switch_requested = True
+        self.close()
+
+    def part_entered_rows(self) -> list[int]:
+        """Voucher rows with a ledger chosen but not yet accepted.
+
+        Separate from the confirmation below so it can be tested without a
+        modal dialog blocking the run.
+        """
+        return [row for row in range(self.voucher.grid.rowCount())
+                if self.voucher.grid.cellWidget(row, 0)
+                and self.voucher.grid.cellWidget(row, 0).currentText().strip()]
+
+    def _confirm_leaving(self, what: str) -> bool:
+        """Warn if a voucher is part-entered, since leaving discards it."""
+        if not self.part_entered_rows():
+            return True
+        answer = QtWidgets.QMessageBox.question(
+            self, what,
+            f"A voucher is part-entered on the Voucher Entry screen. "
+            f"{what} and it will be discarded.\n\nContinue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No)
+        return answer == QtWidgets.QMessageBox.Yes
+
     def _company_changed(self) -> None:
         """Company details were saved: the title and every figure can change,
         since the currency symbol and the financial year both live there."""
@@ -1642,12 +1887,57 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Balance Sheet until the opening balances agree.")
 
 
+def choose_company(app) -> Path | None:
+    """Ask which company to open. None means the user chose to quit.
+
+    The picker is dressed in the colours and text size of the company opened
+    last, read straight out of that file - otherwise a user on the dark scheme
+    at the largest size gets a small white dialog before their own app appears.
+    """
+    previous = db.last_company()
+    if previous is not None:
+        looks = db.peek_settings(
+            previous, (theme.SETTING_KEY, theme.FONT_SETTING_KEY))
+        theme.apply(app, looks.get(theme.SETTING_KEY, theme.DEFAULT))
+        theme.apply_font(app, looks.get(theme.FONT_SETTING_KEY,
+                                        theme.DEFAULT_TEXT))
+
+    picker = CompanyPicker()
+    if not db.company_files():
+        # Nothing to choose from on a fresh install: go straight to creating
+        # one rather than showing an empty list.
+        picker.create()
+        if picker.chosen is None and not picker.exec():
+            return None
+    elif not picker.exec():
+        return None
+    return picker.chosen
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("Bookkeeper")
-    window = MainWindow()
-    window.show()
-    return app.exec()
+    theme.remember_native_style(app)
+    theme.remember_base_font(app)
+
+    # One pass per company opened. Switching company (F3) closes the window and
+    # comes back here, which is far safer than rebuilding every screen in place
+    # against a different database.
+    while True:
+        if db.DB_PINNED:
+            chosen = db.DB_PATH          # BOOKS_DB names the file: don't ask
+        else:
+            chosen = choose_company(app)
+            if chosen is None:
+                return 0
+            db.use_company(chosen)
+            db.remember_last_company(chosen)
+
+        window = MainWindow()
+        window.show()
+        app.exec()
+        if db.DB_PINNED or not window.switch_requested:
+            return 0
 
 
 if __name__ == "__main__":

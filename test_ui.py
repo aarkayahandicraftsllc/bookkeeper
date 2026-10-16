@@ -5,6 +5,7 @@ Run:  python test_ui.py
 
 import os
 import sys
+import shutil
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -14,6 +15,13 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 TMP = Path(tempfile.gettempdir()) / "bookkeeper_ui_test.db"
 TMP.unlink(missing_ok=True)
 os.environ["BOOKS_DB"] = str(TMP)
+# Company files are created in BOOKS_DIR, so point it at a scratch
+# folder: without this the suite would write companies into the
+# user's real data/ directory.
+SANDBOX = Path(tempfile.gettempdir()) / f"bookkeeper_sandbox_{TMP.stem}"
+shutil.rmtree(SANDBOX, ignore_errors=True)
+SANDBOX.mkdir(parents=True, exist_ok=True)
+os.environ["BOOKS_DIR"] = str(SANDBOX)
 
 from streamlit.testing.v1 import AppTest  # noqa: E402
 

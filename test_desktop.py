@@ -8,6 +8,7 @@ means the desktop build is covered by tests rather than only eyeballed.
 
 import os
 import sys
+import shutil
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -18,6 +19,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 TMP = Path(tempfile.gettempdir()) / "bookkeeper_desktop_test.db"
 TMP.unlink(missing_ok=True)
 os.environ["BOOKS_DB"] = str(TMP)
+# Company files are created in BOOKS_DIR, so point it at a scratch
+# folder: without this the suite would write companies into the
+# user's real data/ directory.
+SANDBOX = Path(tempfile.gettempdir()) / f"bookkeeper_sandbox_{TMP.stem}"
+shutil.rmtree(SANDBOX, ignore_errors=True)
+SANDBOX.mkdir(parents=True, exist_ok=True)
+os.environ["BOOKS_DIR"] = str(SANDBOX)
 
 from PySide6 import QtCore, QtGui, QtWidgets  # noqa: E402
 
@@ -528,6 +536,72 @@ window.set_text_size(theme.DEFAULT_TEXT)
 settle()
 check("the Company screen is not over-wide",
       co.minimumSizeHint().width() <= WIDTH_CEILING, True)
+
+print("\n18) Choosing a company at launch")
+
+# This suite pins BOOKS_DB, which is exactly the case where the picker must
+# NOT appear: the caller has already chosen the file.
+check("a pinned data file is detected", db.DB_PINNED, True)
+check("switching is offered only when the file is not pinned",
+      window._switch_action.isEnabled(), not db.DB_PINNED)
+
+# The dialogs are driven directly; they do not depend on being shown.
+made = []
+for name in ("Alpha Exports", "Beta Trading"):
+    dialog = desktop.NewCompanyDialog()
+    dialog.editors["company_name"].setText(name)
+    dialog._create()
+    check(f"created {name}", dialog.created is not None, True)
+    made.append(dialog.created)
+check("they are separate files", made[0] != made[1], True)
+
+picker = desktop.CompanyPicker()
+listed = [picker.table.item(r, 0).text() for r in range(picker.table.rowCount())]
+check("both companies are offered", sorted(set(listed)) [:2],
+      ["Alpha Exports", "Beta Trading"])
+check("the last one opened is preselected",
+      picker.table.item(picker.table.currentRow(), 1).text(),
+      Path(made[-1]).name)
+check("the folder is named in the note", str(db.DATA_DIR) in picker.note.text(),
+      True)
+
+picker.table.selectRow(
+    next(r for r in range(picker.table.rowCount())
+         if picker.table.item(r, 0).text() == "Alpha Exports"))
+picker._open()
+check("opening returns the chosen file",
+      Path(picker.chosen).name, Path(made[0]).name)
+
+refused = desktop.NewCompanyDialog()
+refused.editors["company_name"].setText("   ")
+refused._create()
+check("a company with no name is refused", refused.created, None)
+check("the dialog says why", "name" in refused.status.text().lower(), True)
+
+# Switching closes the window and asks again; main() loops on this flag.
+check("the window does not start out switching", window.switch_requested, False)
+window.switch_company()
+check("switch_company sets the flag", window.switch_requested, True)
+window.switch_requested = False
+
+# A part-entered voucher must not be thrown away silently.
+window.show_screen(0)
+settle()
+check("an empty voucher is not part-entered", window.part_entered_rows(), [])
+check("and needs no confirmation to leave",
+      window._confirm_leaving("Switch company"), True)
+set_row(window.voucher, 0, "Cash", debit=10.0)
+settle()
+check("a part-entered voucher is detected",
+      window.part_entered_rows(), [0])
+window.voucher.reset()
+settle()
+check("resetting clears it again", window.part_entered_rows(), [])
+
+# The real data folder must be untouched by any of this.
+check("the suite wrote only into its sandbox",
+      str(db.DATA_DIR).startswith(str(Path(tempfile.gettempdir()))), True)
+db.use_company(TMP)
 
 print("\n" + ("ALL DESKTOP CHECKS PASSED" if not FAILURES
              else f"FAILURES: {FAILURES}"))
