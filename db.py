@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -30,7 +31,27 @@ from pathlib import Path
 
 import pandas as pd
 
-APP_DIR = Path(__file__).resolve().parent
+def _app_dir() -> Path:
+    """The app's own folder — the anchor for the data folder.
+
+    **Not** ``__file__`` when packaged. A PyInstaller onefile build unpacks
+    itself into a TEMPORARY directory and deletes that directory on exit, so
+    ``__file__`` points somewhere that will not exist next launch: books
+    written beside it are lost the moment the app closes, silently, with the
+    app having looked like it saved them. That is exactly what happened on
+    2026-10-16 — a company created in the packaged app, journals entered, and
+    both gone on the next launch.
+
+    The executable's own location is the stable anchor, which also keeps the
+    promise the packaging script makes: the books sit in ``data`` next to the
+    exe, so the two travel together.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+APP_DIR = _app_dir()
 DATA_DIR = Path(os.environ.get("BOOKS_DIR", APP_DIR / "data"))
 DB_PATH = Path(os.environ.get("BOOKS_DB", DATA_DIR / "books.db"))
 

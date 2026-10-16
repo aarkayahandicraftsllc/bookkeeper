@@ -5,8 +5,11 @@
 Produces dist/Bookkeeper.exe — copy it anywhere and double-click. Python does not
 need to be installed on the machine that runs it.
 
-The books themselves live in data/books.db next to the executable, so keep the
-two together, or point BOOKS_DB somewhere else (OneDrive, a shared folder).
+The books live in a data folder NEXT TO THE EXECUTABLE, so keep the two
+together, or point BOOKS_DIR somewhere else (OneDrive, a shared folder).
+
+That is why dist/ is no longer wiped before a build: dist/data holds real
+books. Only build/ is cleared.
 
 **The executable it replaces is kept.** This script wipes dist/ before
 building, which used to destroy the only copy of the working app - so a bad
@@ -98,8 +101,11 @@ def main() -> int:
         print(f"Could not archive the previous build ({error}) - "
               f"continuing with the build.")
 
-    for stale in ("build", "dist"):
-        shutil.rmtree(HERE / stale, ignore_errors=True)
+    # build/ only. dist/ is NOT wiped any more: the packaged app keeps its
+    # books in dist/data, next to the executable, and wiping dist/ would delete
+    # them on every rebuild. PyInstaller overwrites the exe by itself, and
+    # archive_current() has already moved the old one aside.
+    shutil.rmtree(HERE / "build", ignore_errors=True)
 
     command = [
         sys.executable, "-m", "PyInstaller",

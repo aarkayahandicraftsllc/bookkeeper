@@ -405,6 +405,33 @@ except ValueError:
     pass
 check("a rejected save writes nothing", db.get_company(), before)
 
+print("\nWhere the data folder lives when packaged")
+# The bug this guards (2026-10-16): APP_DIR came from __file__, and a
+# PyInstaller onefile build unpacks into a TEMPORARY directory it deletes on
+# exit - so the packaged app wrote its books somewhere that ceased to exist
+# when it closed. A company created in the exe, with journals entered, was
+# gone on the next launch. Invisible from source, where __file__ is correct,
+# so it needs a test that pretends to be frozen.
+_real_frozen = getattr(sys, "frozen", None)
+_real_executable = sys.executable
+try:
+    sys.frozen = True
+    sys.executable = str(Path(tempfile.gettempdir()) / "somewhere"
+                         / "Bookkeeper.exe")
+    frozen_dir = db._app_dir()
+    check("packaged, the anchor is the executable's folder",
+          frozen_dir, Path(sys.executable).resolve().parent)
+    check("and NOT the unpacked module directory",
+          frozen_dir == Path(db.__file__).resolve().parent, False)
+finally:
+    sys.executable = _real_executable
+    if _real_frozen is None:
+        del sys.frozen
+    else:
+        sys.frozen = _real_frozen
+check("from source, the anchor is the module's folder",
+      db._app_dir(), Path(db.__file__).resolve().parent)
+
 print("\nMore than one company")
 # Each company is its own file, so the test is whether the books really are
 # separate - a ledger in one must not be visible in the other. Both are created
