@@ -290,10 +290,28 @@ pip install -r requirements-desktop.txt pyinstaller
 python build_exe.py
 ```
 
-Produces `dist/Bookkeeper.exe` — copy it anywhere and double-click, no Python
-needed on that machine. The books live in `data/books.db` beside the
-executable; keep the two together, or set `BOOKS_DB` to put the file somewhere
-else such as a OneDrive folder.
+Produces **`Bookkeeper.exe` in this folder, beside `data/`** — copy the two
+together anywhere and double-click, no Python needed on that machine.
+
+**The books live in a `data` folder next to the executable.** That is why the
+exe is built here rather than into `dist/`: here, the packaged app and
+`python desktop.py` read the *same* books. Built into `dist/` they had a set
+each, and vouchers entered through one were missing from the other. Set
+`BOOKS_DIR` to override — a OneDrive or shared folder, say.
+
+> **This was a real data-loss bug, fixed 2026-10-16.** The data folder was
+> anchored on `__file__`, and a PyInstaller *onefile* build unpacks itself into
+> a temporary directory that is **deleted when the app exits** — so the
+> packaged app wrote its books somewhere that ceased to exist the moment it
+> closed, having looked throughout as though it had saved. A company created in
+> the exe, with journals entered, was gone on the next launch and was not
+> recoverable. `db._app_dir()` now anchors on `sys.executable` when
+> `sys.frozen` is set. It is invisible from source, where `__file__` is
+> correct, so `test_books.py` pretends to be frozen and asserts the anchor
+> follows the executable.
+>
+> For the same reason `build_exe.py` no longer wipes its output folder — that
+> folder holds real books.
 
 ## Tests
 

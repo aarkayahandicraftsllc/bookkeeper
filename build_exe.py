@@ -2,21 +2,20 @@
 
     python build_exe.py
 
-Produces dist/Bookkeeper.exe — copy it anywhere and double-click. Python does not
-need to be installed on the machine that runs it.
+Produces Bookkeeper.exe in this folder, BESIDE data/ — copy the two together
+anywhere and double-click. Python does not need to be installed on the machine
+that runs it.
 
-The books live in a data folder NEXT TO THE EXECUTABLE, so keep the two
-together, or point BOOKS_DIR somewhere else (OneDrive, a shared folder).
+**Why beside data/ and not in dist/.** The books live in a data folder next to
+the executable, so putting the exe here means `python desktop.py` and the
+packaged app read the SAME books; built into dist/ they would have had a set
+each, and vouchers entered through one would be missing from the other. Point
+BOOKS_DIR elsewhere (OneDrive, a shared folder) to override.
 
-That is why dist/ is no longer wiped before a build: dist/data holds real
-books. Only build/ is cleared.
-
-**The executable it replaces is kept.** This script wipes dist/ before
-building, which used to destroy the only copy of the working app - so a bad
-build left nothing to fall back to. The outgoing exe is now moved to
+**The executable it replaces is kept.** The outgoing exe is moved to
 previous/Bookkeeper-<when it was built>.exe first, the newest KEEP_PREVIOUS are
-retained, and if PyInstaller fails the last good one is put back in dist/ so
-you are never left without a runnable app.
+retained, and if PyInstaller fails the last good one is put straight back, so
+a bad build never leaves you without a runnable app.
 """
 
 import shutil
@@ -26,9 +25,9 @@ from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DIST = HERE / "dist"
 PREVIOUS = HERE / "previous"
 EXE_NAME = "Bookkeeper.exe"
+EXE_PATH = HERE / EXE_NAME
 
 # How many superseded builds to keep. Two rather than one: if you rebuild twice
 # before noticing a problem, one would already have overwritten your only good
@@ -48,7 +47,7 @@ def archive_current() -> Path | None:
     cannot be DELETED until that process exits, which is why prune_previous()
     tolerates a refusal.
     """
-    current = DIST / EXE_NAME
+    current = EXE_PATH
     if not current.exists():
         return None
 
@@ -101,10 +100,8 @@ def main() -> int:
         print(f"Could not archive the previous build ({error}) - "
               f"continuing with the build.")
 
-    # build/ only. dist/ is NOT wiped any more: the packaged app keeps its
-    # books in dist/data, next to the executable, and wiping dist/ would delete
-    # them on every rebuild. PyInstaller overwrites the exe by itself, and
-    # archive_current() has already moved the old one aside.
+    # build/ only, never this folder: data/ lives here, and so does the exe,
+    # which archive_current() has already moved aside.
     shutil.rmtree(HERE / "build", ignore_errors=True)
 
     command = [
@@ -118,6 +115,9 @@ def main() -> int:
         "--hidden-import", "db",
         "--hidden-import", "accounting",
         "--paths", str(HERE),
+        # Beside data/, not in dist/, so the packaged app and `python
+        # desktop.py` read the same books.
+        "--distpath", str(HERE),
         str(HERE / "desktop.py"),
     ]
     print(" ".join(command), "\n")
@@ -126,13 +126,11 @@ def main() -> int:
         # Put the last good exe back, so a failed build does not leave you
         # without a runnable app. It stays in previous/ as well.
         if kept is not None and kept.exists():
-            DIST.mkdir(exist_ok=True)
-            shutil.copy2(str(kept), str(DIST / EXE_NAME))
-            print(f"\nBuild failed - restored {kept.name} to "
-                  f"{(DIST / EXE_NAME).relative_to(HERE)}")
+            shutil.copy2(str(kept), str(EXE_PATH))
+            print(f"\nBuild failed - restored {kept.name} as {EXE_PATH.name}")
         return result.returncode
 
-    built = DIST / EXE_NAME
+    built = EXE_PATH
     if built.exists():
         size = built.stat().st_size / (1024 * 1024)
         print(f"\nBuilt {built}  ({size:.0f} MB)")
