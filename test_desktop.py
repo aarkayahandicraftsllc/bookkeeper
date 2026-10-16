@@ -56,10 +56,10 @@ app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 window = desktop.MainWindow()
 
 print("\n1) The window opens with every screen")
-check("seven screens", window.stack.count(), 7)
+check("eight screens", window.stack.count(), 8)
 check("screen names", [name.replace("&&", "&") for name, _ in window.screens],
       ["Voucher Entry", "Day Book", "Ledger", "Trial Balance", "Profit & Loss",
-       "Balance Sheet", "Masters"])
+       "Balance Sheet", "Masters", "Company"])
 check("starts on voucher entry", window.stack.currentIndex(), 0)
 check("title names the company", "Bookkeeper" in window.windowTitle(), True)
 
@@ -475,6 +475,59 @@ check("text size returns to the default",
       QtWidgets.QApplication.font().pointSize(), base_pt)
 check("the balance sheet still balances",
       acc.balance_sheet()["totals"]["difference"], 0.0, tol=0.0)
+
+print("\n17) The Company screen")
+
+co = window.company
+check("every declared field has an editor",
+      sorted(co.editors), sorted(f.key for f in db.COMPANY_FIELDS))
+check("it is reachable as a screen",
+      "Company" in [name for name, _ in window.screens], True)
+
+window.show_screen(len(window.screens) - 1)
+settle()
+co.editors["company_name"].setText("Aarkaya Handicrafts LLC")
+co.editors["pan"].setText("aaapz1234c")          # lower case on purpose
+co.editors["gstin"].setText("09AAAPZ1234C1Z5")
+co.editors["address"].setPlainText("12 Mall Road\nNew Delhi")
+check("saving valid details succeeds", co.save(), True)
+check("the form shows the upper-cased PAN back",
+      co.editors["pan"].text(), "AAAPZ1234C")
+check("it reached the books", db.get_company()["gstin"], "09AAAPZ1234C1Z5")
+check("the window title follows the company name",
+      window.windowTitle().startswith("Aarkaya Handicrafts LLC"), True)
+
+# A rejected save must explain itself and KEEP the typing - losing a form to
+# one bad character is worse than the bad character.
+co.editors["gstin"].setText("09BBBPZ1234C1Z5")
+check("a GSTIN not carrying the PAN is refused", co.save(), False)
+check("the reason is on screen", "PAN" in co.status.text(), True)
+check("the typing survives a refusal",
+      co.editors["company_name"].text(), "Aarkaya Handicrafts LLC")
+check("and nothing was written", db.get_company()["gstin"], "09AAAPZ1234C1Z5")
+
+# refresh_all() reaches every screen; it must not wipe a part-typed form, just
+# as it leaves a part-entered voucher alone.
+co.editors["phone"].setText("011-5550123")
+window.refresh_all()
+settle()
+check("refresh_all leaves unsaved company edits alone",
+      co.editors["phone"].text(), "011-5550123")
+co.refresh()
+check("Revert reloads what is saved", co.editors["phone"].text(), "")
+
+# The address box is sized in LINES, so it has to grow with the text setting.
+heights = []
+for key in theme.TEXT_ORDER:
+    window.set_text_size(key)
+    settle()
+    heights.append(co.editors["address"].minimumHeight())
+check("the address box grows with the text size", heights, sorted(set(heights)))
+print(f"       address box: {' -> '.join(f'{h}px' for h in heights)}")
+window.set_text_size(theme.DEFAULT_TEXT)
+settle()
+check("the Company screen is not over-wide",
+      co.minimumSizeHint().width() <= WIDTH_CEILING, True)
 
 print("\n" + ("ALL DESKTOP CHECKS PASSED" if not FAILURES
              else f"FAILURES: {FAILURES}"))

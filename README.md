@@ -24,7 +24,8 @@ Tally for data entry. The desktop app is for entry; use either for reports.
 | --- | --- |
 | `F4` `F5` `F6` `F7` `F8` `F9` | Contra, Payment, Receipt, Journal, Sales, Purchase |
 | `Ctrl+A` | Accept the voucher |
-| `Ctrl+1` … `Ctrl+7` | Jump between screens |
+| `Ctrl+1` … `Ctrl+8` | Jump between screens (`Ctrl+8` is Company) |
+| `Ctrl+S` | Save the company details, on that screen |
 | `Alt+C` | Create a ledger from the line you are on |
 | `F2` | Set the voucher date |
 | `F11` | Refresh every report |
@@ -107,6 +108,41 @@ scheme on it would keep white table headers and buttons.
 
 The Streamlit version is unaffected; it keeps its browser default.
 
+## Company details
+
+**Ctrl+8**, or Masters → Company in the browser version. Fifteen fields:
+
+| | |
+| --- | --- |
+| Identity | Company name (required), Mailing name |
+| Address | Address, State, PIN code, Country, Phone, E-mail |
+| Registrations | PAN, GSTIN, TAN, CIN |
+| Books | Financial year begins, Books begin on, Currency symbol |
+
+**Blank is always allowed** except the name — these are details you fill in as
+you learn them, and refusing to save a half-known address would be worse than
+useless. But a registration that *is* filled in has to be well formed, because
+a malformed GSTIN is worse than an absent one: it reaches a filing looking
+legitimate. PAN, GSTIN, TAN and CIN are stored upper case, and the form shows
+them back that way so you can see it happened.
+
+The sharpest check is the cross-reference: **a GSTIN contains its holder's PAN**
+at characters 3–12, so if both fields are filled and they disagree, one of them
+is wrong — and this is the only place that would ever be noticed.
+
+```
+The GSTIN carries PAN BBBPZ1234C, but the PAN field says AAAPZ1234C.
+A GSTIN always contains the holder's PAN, so one of the two is wrong.
+```
+
+A rejected save **writes nothing and keeps your typing** — losing a form to one
+bad character is worse than the bad character.
+
+The field list lives in `db.COMPANY_FIELDS`, and both front ends render from it
+and save through `db.save_company`. Adding a field to that tuple puts it on the
+Qt screen and in the Streamlit form, validated the same way, with nothing
+further to write.
+
 ## Creating masters mid-voucher
 
 You rarely know every account before you start entering. Press **Alt+C** (or
@@ -162,6 +198,7 @@ Balances are held **debit-positive** internally: `+500` is 500 Dr, `-500` is
 | **Profit & Loss** | Trading account → gross profit, then the indirect accounts → net profit. |
 | **Balance Sheet** | Liabilities and assets side by side, with net profit carried to Profit & Loss A/c. |
 | **Masters** | Create and alter ledgers and sub-groups. |
+| **Company** | Who the books belong to: name, address, PAN, GSTIN, TAN, CIN, financial year, currency. |
 
 ## The rules it enforces, and the ones it only advises
 

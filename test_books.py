@@ -329,5 +329,73 @@ try:
 except ValueError:
     check("deleting a reserved group", "rejected", "rejected")
 
+print("\nCompany master")
+GOOD = {
+    "company_name": "Aarkaya Handicrafts LLC",
+    "mailing_name": "",
+    "address": "12 Mall Road\nNew Delhi",
+    "state": "Delhi",
+    "pincode": "110001",
+    "country": "India",
+    "phone": "011-5550123",
+    "email": "books@aarkaya.example",
+    "pan": "aaapz1234c",            # lower case on purpose
+    "gstin": "09AAAPZ1234C1Z5",
+    "tan": "dela12345b",
+    "cin": "U12345DL2020PTC123456",
+    "fy_start_month": "4",
+    "books_begin": "2026-04-01",
+    "currency": "₹",
+}
+stored = db.save_company(GOOD)
+check("company details round-trip",
+      db.get_company()["company_name"], GOOD["company_name"])
+check("identifiers are stored upper case", stored["pan"], "AAAPZ1234C")
+check("TAN upper-cased too", stored["tan"], "DELA12345B")
+check("the address keeps its line break",
+      db.get_company()["address"], GOOD["address"])
+check("mailing name falls back to the company name",
+      db.company_display_name(), GOOD["company_name"])
+db.save_company(dict(GOOD, mailing_name="Aarkaya Handicrafts"))
+check("a mailing name is preferred when set",
+      db.company_display_name(), "Aarkaya Handicrafts")
+
+# Blank is always allowed: these are details you fill in as you learn them.
+bare = db.validate_company({"company_name": "X"})
+check("optional fields may be blank", bare["pan"], "")
+check("a blank currency falls back to the default",
+      bare["currency"], db.DEFAULT_SETTINGS["currency"])
+check("a blank financial year falls back to April",
+      bare["fy_start_month"], "4")
+
+# A value that IS given has to be well formed - a malformed GSTIN is worse than
+# an absent one, because it reaches a filing looking legitimate.
+REJECT = {
+    "no name": dict(GOOD, company_name="   "),
+    "malformed PAN": dict(GOOD, pan="ABC123", gstin=""),
+    "malformed GSTIN": dict(GOOD, gstin="09AAAPZ1234C1X5"),
+    "GSTIN not carrying the PAN": dict(GOOD, pan="BBBPZ1234C"),
+    "malformed TAN": dict(GOOD, tan="XX1"),
+    "malformed CIN": dict(GOOD, cin="NOPE"),
+    "five-digit PIN code": dict(GOOD, pincode="11000"),
+    "not an e-mail": dict(GOOD, email="books-at-aarkaya"),
+    "month 13": dict(GOOD, fy_start_month="13"),
+    "date the wrong way round": dict(GOOD, books_begin="01/04/2026"),
+}
+for label, values in REJECT.items():
+    try:
+        db.validate_company(values)
+        check(f"rejects {label}", "accepted", "rejected")
+    except ValueError:
+        check(f"rejects {label}", "rejected", "rejected")
+
+# Nothing is written when validation fails, or a half-valid save would land.
+before = db.get_company()
+try:
+    db.save_company(dict(GOOD, pan="RUBBISH", state="Karnataka"))
+except ValueError:
+    pass
+check("a rejected save writes nothing", db.get_company(), before)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAILURES else f"FAILURES: {FAILURES}"))
 raise SystemExit(1 if FAILURES else 0)

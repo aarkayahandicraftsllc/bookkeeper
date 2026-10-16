@@ -12,7 +12,8 @@ type the way Tally's do. Keyboard map follows Tally where it sensibly can:
 
     F4 Contra   F5 Payment   F6 Receipt   F7 Journal   F8 Sales   F9 Purchase
     Ctrl+A            accept the voucher
-    Ctrl+1..7         jump between screens
+    Ctrl+1..8         jump between screens (8 = Company details)
+    Ctrl+S            save the company details, on that screen
     F2                set the voucher date
     Esc               back to voucher entry
     Ctrl+Shift+1..5   colour scheme (also under Settings > Colour scheme)
@@ -26,6 +27,7 @@ setting. Build fonts with ``mono_font()`` / ``heading()``, not ``QFont(...)``.
 
 from __future__ import annotations
 
+import calendar
 import sys
 from datetime import date
 
@@ -138,6 +140,24 @@ def apply_mono(widget) -> None:
     change can find it again."""
     widget.setFont(mono_font())
     widget.setProperty("mono", True)
+
+
+def fit_lines(widget) -> None:
+    """Size a multi-line box in LINES of the current font, not pixels.
+
+    Marked with a ``lines`` property so a text-size change can re-measure it;
+    a pixel height would clip the text at the larger sizes.
+
+    Measured against ``theme.point_size()`` rather than ``widget.font()``:
+    ``app.setFont()`` propagates through a POSTED event, so a widget asked
+    straight afterwards still reports its old font and the box would be
+    measured with stale metrics - which is exactly what left it unchanged.
+    """
+    rows = int(widget.property("lines") or 3)
+    font = widget.font()
+    font.setPointSize(theme.point_size())
+    metrics = QtGui.QFontMetrics(font)
+    widget.setMinimumHeight(metrics.lineSpacing() * rows + 12)
 
 
 def flowing(label: QtWidgets.QLabel) -> QtWidgets.QLabel:
@@ -1156,6 +1176,161 @@ class MastersScreen(QtWidgets.QWidget):
 
 
 # --------------------------------------------------------------------------- #
+# company master
+# --------------------------------------------------------------------------- #
+class CompanyScreen(QtWidgets.QWidget):
+    """Who the books belong to: name, address, registrations, the year.
+
+    The form is BUILT FROM ``db.COMPANY_FIELDS`` rather than written out, so a
+    field added to that tuple appears here and in the Streamlit form with
+    nothing further to write, and both save through the same validation.
+    """
+
+    changed = QtCore.Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(heading("Company"))
+        layout.addWidget(muted(flowing(QtWidgets.QLabel(
+            "Printed on statements and quoted on returns. Everything but the "
+            "name can be left blank until you have it — but a PAN, GSTIN, TAN "
+            "or CIN that IS filled in has to be the right shape, because a "
+            "malformed one is worse than an absent one."))))
+
+        # Fifteen rows at the largest text size is taller than the window, so
+        # the form scrolls instead of having its last fields cut off.
+        host = QtWidgets.QWidget()
+        self.form = QtWidgets.QFormLayout(host)
+        self.form.setFieldGrowthPolicy(
+            QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
+        self.editors: dict[str, QtWidgets.QWidget] = {}
+        for field in db.COMPANY_FIELDS:
+            editor = self._editor_for(field)
+            if field.hint:
+                editor.setToolTip(field.hint)
+            self.editors[field.key] = editor
+            label = QtWidgets.QLabel(
+                f"{field.label} *" if field.required else field.label)
+            self.form.addRow(label, editor)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setWidget(host)
+        layout.addWidget(scroll, 1)
+
+        self.status = flowing(QtWidgets.QLabel())
+        layout.addWidget(self.status)
+
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addStretch(1)
+        revert = QtWidgets.QPushButton("Revert")
+        revert.setToolTip("Discard edits and reload what is saved")
+        revert.clicked.connect(self.refresh)
+        self.save_button = QtWidgets.QPushButton("Save  (Ctrl+S)")
+        self.save_button.setDefault(True)
+        self.save_button.clicked.connect(self.save)
+        buttons.addWidget(revert)
+        buttons.addWidget(self.save_button)
+        layout.addLayout(buttons)
+
+        action = QtGui.QAction("Save company", self)
+        action.setShortcut(QtGui.QKeySequence("Ctrl+S"))
+        action.triggered.connect(self.save)
+        self.addAction(action)
+
+        self.refresh()
+
+    def _editor_for(self, field) -> QtWidgets.QWidget:
+        if field.kind == "multiline":
+            editor = QtWidgets.QPlainTextEdit()
+            editor.setPlaceholderText(field.hint)
+            editor.setProperty("lines", 3)
+            fit_lines(editor)
+            return editor
+        if field.kind == "month":
+            editor = QtWidgets.QComboBox()
+            for month in range(1, 13):
+                editor.addItem(calendar.month_name[month], month)
+            return editor
+        if field.kind == "date":
+            editor = QtWidgets.QDateEdit()
+            editor.setCalendarPopup(True)
+            editor.setDisplayFormat("dd/MM/yyyy")
+            return editor
+        if field.kind == "choice":
+            editor = QtWidgets.QComboBox()
+            editor.setEditable(True)        # so an unlisted symbol still works
+            editor.addItems(list(field.choices))
+            return editor
+        editor = QtWidgets.QLineEdit()
+        editor.setPlaceholderText(field.hint)
+        return editor
+
+    def refresh(self) -> None:
+        """Load what is saved, discarding any edits.
+
+        Called when you switch TO this screen, and by Revert - but deliberately
+        NOT by refresh_all(), which would throw away half-typed details the
+        moment a voucher was posted elsewhere. The voucher screen is left out
+        of refresh_all() for the same reason: both hold input, not a report.
+        """
+        values = db.get_company()
+        for field in db.COMPANY_FIELDS:
+            editor = self.editors[field.key]
+            value = values.get(field.key, "")
+            if field.kind == "multiline":
+                editor.setPlainText(value)
+                fit_lines(editor)
+            elif field.kind == "month":
+                editor.setCurrentIndex(max(0, int(value or 4) - 1))
+            elif field.kind == "date":
+                editor.setDate(to_qdate(value) if value
+                               else to_qdate(date.today()))
+            elif field.kind == "choice":
+                editor.setCurrentText(value)
+            else:
+                editor.setText(value)
+        self.status.clear()
+
+    def values(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for field in db.COMPANY_FIELDS:
+            editor = self.editors[field.key]
+            if field.kind == "multiline":
+                out[field.key] = editor.toPlainText()
+            elif field.kind == "month":
+                out[field.key] = str(editor.currentData())
+            elif field.kind == "date":
+                out[field.key] = from_qdate(editor.date()).isoformat()
+            elif field.kind == "choice":
+                out[field.key] = editor.currentText()
+            else:
+                out[field.key] = editor.text()
+        return out
+
+    def save(self) -> bool:
+        """Save, or explain why not. Rejected input is LEFT IN THE FORM, so a
+        single bad character does not cost the rest of the typing."""
+        try:
+            saved = db.save_company(self.values())
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            tone(self.status, "bad")
+            return False
+        # Re-show the cleaned values: identifiers come back upper-cased, which
+        # the user should see rather than wonder about.
+        for key in db.UPPER_FIELDS:
+            self.editors[key].setText(saved[key])
+        self.status.setText(f"Saved. {saved['company_name']}"
+                            + (f" · GSTIN {saved['gstin']}" if saved["gstin"]
+                               else ""))
+        tone(self.status, "good")
+        self.changed.emit()
+        return True
+
+
+# --------------------------------------------------------------------------- #
 # main window
 # --------------------------------------------------------------------------- #
 class MainWindow(QtWidgets.QMainWindow):
@@ -1174,8 +1349,7 @@ class MainWindow(QtWidgets.QMainWindow):
             theme.apply_font(
                 app, db.get_setting(theme.FONT_SETTING_KEY, theme.DEFAULT_TEXT))
 
-        company = db.get_setting("company_name", "My Company")
-        self.setWindowTitle(f"{company} — Bookkeeper")
+        self._set_title()
         # The window grows with the text. At a larger size the same 1180x760
         # would simply push the lower half of a screen out of view, which is
         # the opposite of making anything easier to read.
@@ -1191,6 +1365,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.profit = ProfitLossScreen()
         self.sheet = BalanceSheetScreen()
         self.masters = MastersScreen()
+        self.company = CompanyScreen()
 
         self.screens = [
             ("Voucher Entry", self.voucher),
@@ -1200,6 +1375,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ("Profit && Loss", self.profit),
             ("Balance Sheet", self.sheet),
             ("Masters", self.masters),
+            ("Company", self.company),
         ]
         for _, widget in self.screens:
             self.stack.addWidget(widget)
@@ -1209,6 +1385,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.masters.changed.connect(self.refresh_all)
         self.daybook.open_voucher.connect(self._alter)
         self.ledger.open_voucher.connect(self._alter)
+        # The company name is in the title bar and its currency symbol is in
+        # every figure, so saving it has to reach the whole window.
+        self.company.changed.connect(self._company_changed)
 
         self._build_menu()
         self.statusBar().showMessage("F4–F9 switch voucher type · Ctrl+A accepts")
@@ -1390,6 +1569,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 widget.setFont(font)
             elif widget.property("mono"):
                 widget.setFont(mono_font())
+            elif widget.property("lines"):
+                fit_lines(widget)
 
         # Rebuilds every table against the new metrics, which re-fonts the
         # amount items and re-measures the columns.
@@ -1401,6 +1582,19 @@ class MainWindow(QtWidgets.QMainWindow):
             self.resize(self._sized_to_text())
         self.statusBar().showMessage(
             f"Text size: {theme.TEXT_LABELS[key]} ({theme.point_size()}pt)")
+
+    def _set_title(self) -> None:
+        self.setWindowTitle(f"{db.company_display_name()} — Bookkeeper")
+
+    def _company_changed(self) -> None:
+        """Company details were saved: the title and every figure can change,
+        since the currency symbol and the financial year both live there."""
+        self._set_title()
+        self.voucher.reload_ledgers()
+        self.ledger.reload_ledgers()
+        for _, widget in self.screens:
+            if widget is not self.company and hasattr(widget, "refresh"):
+                widget.refresh()
 
     def _masters_changed(self) -> None:
         """A master was created mid-voucher: refresh everything but the grid."""
@@ -1432,8 +1626,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def refresh_all(self) -> None:
         self.voucher.reload_ledgers()
         self.ledger.reload_ledgers()
+        # The voucher and company screens hold INPUT, not a report. Refreshing
+        # them here would discard a part-entered voucher or half-typed company
+        # details the moment anything else in the app changed.
         for _, widget in self.screens:
-            if widget is not self.voucher and hasattr(widget, "refresh"):
+            if widget not in (self.voucher, self.company) \
+                    and hasattr(widget, "refresh"):
                 widget.refresh()
 
         gap = acc.opening_difference()

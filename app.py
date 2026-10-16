@@ -535,29 +535,52 @@ with tab_bs:
 # --------------------------------------------------------------------------- #
 with tab_masters:
     st.subheader("Company")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        new_name = st.text_input("Company name", value=COMPANY)
-    with c2:
-        new_fy = st.selectbox("Financial year starts", list(range(1, 13)),
-                              index=FY_START_MONTH - 1,
-                              format_func=lambda m: calendar.month_name[m])
-    with c3:
-        symbols = ["₹", "$", "€", "£"]
-        new_cur = st.selectbox(
-            "Currency", symbols,
-            index=symbols.index(CURRENCY) if CURRENCY in symbols else 0)
-    begin = st.date_input(
-        "Books begin on",
-        value=date.fromisoformat(BOOKS_BEGIN) if BOOKS_BEGIN else FY_START,
-        format="DD/MM/YYYY")
+    st.caption(
+        "Printed on statements and quoted on returns. Everything but the name "
+        "can be left blank until you have it — but a PAN, GSTIN, TAN or CIN "
+        "that *is* filled in has to be the right shape."
+    )
+    # Rendered from db.COMPANY_FIELDS, the same tuple the desktop screen reads,
+    # so a field added there appears in both front ends and is validated once.
+    saved_company = db.get_company()
+    entered: dict[str, str] = {}
+    columns = st.columns(3)
+    for position, field in enumerate(db.COMPANY_FIELDS):
+        current = saved_company.get(field.key, "")
+        if field.kind == "multiline":
+            entered[field.key] = st.text_area(
+                field.label, value=current, help=field.hint or None)
+            continue
+        slot = columns[position % 3]
+        with slot:
+            if field.kind == "month":
+                entered[field.key] = str(st.selectbox(
+                    field.label, list(range(1, 13)),
+                    index=max(0, int(current or 4) - 1),
+                    format_func=lambda m: calendar.month_name[m],
+                    help=field.hint or None))
+            elif field.kind == "date":
+                entered[field.key] = st.date_input(
+                    field.label,
+                    value=date.fromisoformat(current) if current else FY_START,
+                    format="DD/MM/YYYY").isoformat()
+            elif field.kind == "choice":
+                choices = list(field.choices)
+                entered[field.key] = st.selectbox(
+                    field.label, choices,
+                    index=choices.index(current) if current in choices else 0,
+                    help=field.hint or None)
+            else:
+                entered[field.key] = st.text_input(
+                    field.label, value=current, help=field.hint or None)
     if st.button("Save company details"):
-        db.set_setting("company_name", new_name.strip() or "My Company")
-        db.set_setting("fy_start_month", new_fy)
-        db.set_setting("currency", new_cur)
-        db.set_setting("books_begin", begin.isoformat())
-        flash("Company details saved.")
-        st.rerun()
+        try:
+            db.save_company(entered)
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            flash("Company details saved.")
+            st.rerun()
 
     st.divider()
     st.subheader("Ledgers")

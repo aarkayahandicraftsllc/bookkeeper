@@ -143,4 +143,34 @@ sheet = acc.balance_sheet()
 assert sheet["totals"]["difference"] == 0.0, sheet["totals"]
 print("PASS  and the balance sheet still balances, with the residual named")
 
+print("\n9) The company form, rendered from the shared field list")
+at = fresh()
+assert not at.exception, at.exception
+labels = ({i.label for i in at.text_input} | {a.label for a in at.text_area}
+          | {s.label for s in at.selectbox} | {d.label for d in at.date_input})
+missing = [f.label for f in db.COMPANY_FIELDS if f.label not in labels]
+assert not missing, f"not rendered: {missing}"
+print(f"PASS  all {len(db.COMPANY_FIELDS)} company fields render "
+      f"(PAN, GSTIN, address, financial year...)")
+
+pan = next(i for i in at.text_input if i.label == "PAN")
+gstin = next(i for i in at.text_input if i.label == "GSTIN")
+save = next(b for b in at.button if "Save company details" in b.label)
+pan.set_value("aaapz1234c")
+gstin.set_value("09AAAPZ1234C1Z5")
+at = save.click().run()
+assert not at.exception, at.exception
+assert db.get_company()["pan"] == "AAAPZ1234C", db.get_company()["pan"]
+print("PASS  saving through the form stores the upper-cased PAN")
+
+# The same validation the desktop screen gets, because both call save_company.
+at = fresh()
+next(i for i in at.text_input if i.label == "GSTIN").set_value("09BBBPZ1234C1Z5")
+at = next(b for b in at.button if "Save company details" in b.label).click().run()
+assert not at.exception, at.exception
+errors = " ".join(e.value for e in at.error)
+assert "PAN" in errors, errors or "no error shown"
+assert db.get_company()["gstin"] == "09AAAPZ1234C1Z5", "a bad GSTIN was stored"
+print("PASS  a GSTIN not carrying the PAN is refused, and nothing is stored")
+
 print("\nALL UI CHECKS PASSED")

@@ -21,9 +21,11 @@ Everything is stored debit-positive internally: a signed balance of +500 means
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -140,7 +142,162 @@ DEFAULT_SETTINGS = {
     "fy_start_month": "4",          # April, the Indian financial year
     "books_begin": "",              # filled in on first run
     "currency": "₹",
+    "country": "India",
 }
+
+
+# --------------------------------------------------------------------------- #
+# company master
+# --------------------------------------------------------------------------- #
+# Tally's Company Creation screen, trimmed to the fields that earn their place
+# in a book-keeping-only build: who the company is, where it is, what it is
+# registered as, and which year the books cover. Declared once, here in the data
+# layer, because BOTH front ends render and save it - a field added to this
+# tuple appears in the Qt screen and the Streamlit form with no further work,
+# and both get the same validation.
+@dataclass(frozen=True)
+class CompanyField:
+    key: str
+    label: str
+    kind: str = "text"          # text | multiline | month | date | choice
+    hint: str = ""
+    choices: tuple[str, ...] = ()
+    required: bool = False
+
+
+CURRENCY_SYMBOLS = ("₹", "$", "€", "£", "¥")
+
+COMPANY_FIELDS: tuple[CompanyField, ...] = (
+    CompanyField("company_name", "Company name", required=True),
+    CompanyField("mailing_name", "Mailing name",
+                 hint="How the name should print on statements. "
+                      "Blank uses the company name."),
+    CompanyField("address", "Address", kind="multiline"),
+    CompanyField("state", "State"),
+    CompanyField("pincode", "PIN code", hint="Six digits."),
+    CompanyField("country", "Country"),
+    CompanyField("phone", "Phone"),
+    CompanyField("email", "E-mail"),
+    CompanyField("pan", "PAN", hint="Ten characters, e.g. AAAPZ1234C."),
+    CompanyField("gstin", "GSTIN",
+                 hint="Fifteen characters. Must carry the same PAN."),
+    CompanyField("tan", "TAN", hint="Ten characters, e.g. DELA12345B."),
+    CompanyField("cin", "CIN", hint="Twenty-one characters."),
+    CompanyField("fy_start_month", "Financial year begins", kind="month"),
+    CompanyField("books_begin", "Books begin on", kind="date"),
+    CompanyField("currency", "Currency symbol", kind="choice",
+                 choices=CURRENCY_SYMBOLS),
+)
+
+# Identifiers are stored upper case, because that is how they are issued and
+# how they must be quoted - and because a lower-case PAN would otherwise fail
+# the GSTIN cross-check for no reason the user can see.
+UPPER_FIELDS = ("pan", "gstin", "tan", "cin")
+
+PAN_RE = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+# 2-digit state code, the holder's PAN, entity number, 'Z', then a check digit.
+GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$")
+TAN_RE = re.compile(r"^[A-Z]{4}[0-9]{5}[A-Z]$")
+CIN_RE = re.compile(r"^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$")
+PINCODE_RE = re.compile(r"^[0-9]{6}$")
+
+
+def get_company() -> dict[str, str]:
+    """Every company field, with the defaults filled in."""
+    with connect() as conn:
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    stored = {row["key"]: row["value"] for row in rows}
+    return {field.key: str(stored.get(field.key,
+                                      DEFAULT_SETTINGS.get(field.key, "")) or "")
+            for field in COMPANY_FIELDS}
+
+
+def validate_company(values: dict[str, str]) -> dict[str, str]:
+    """Clean and check the company details. Returns what should be stored.
+
+    Blank is always acceptable - these are details you fill in as you learn
+    them, and refusing to save a half-known address would be worse than useless.
+    A value that IS given has to be well formed, because a malformed GSTIN is
+    worse than an absent one: it reaches a filing looking legitimate.
+    """
+    cleaned: dict[str, str] = {}
+    for field in COMPANY_FIELDS:
+        raw = values.get(field.key, "")
+        text = str("" if raw is None else raw).strip()
+        if field.key in UPPER_FIELDS:
+            text = text.upper()
+        cleaned[field.key] = text
+
+    if not cleaned["company_name"]:
+        raise ValueError("The company needs a name.")
+
+    for key, pattern, label, shape in (
+        ("pan", PAN_RE, "PAN", "five letters, four digits, one letter"),
+        ("gstin", GSTIN_RE, "GSTIN",
+         "two-digit state code, a PAN, entity number, Z, check digit"),
+        ("tan", TAN_RE, "TAN", "four letters, five digits, one letter"),
+        ("cin", CIN_RE, "CIN", "21 characters, starting L or U"),
+        ("pincode", PINCODE_RE, "PIN code", "six digits"),
+    ):
+        if cleaned[key] and not pattern.match(cleaned[key]):
+            raise ValueError(
+                f"{label} {cleaned[key]!r} is not the right shape "
+                f"({shape}). Leave it blank if you do not have it yet.")
+
+    # A GSTIN contains its holder's PAN at characters 3 to 12. If both are given
+    # and they disagree, one of the two is wrong, and this is the only place it
+    # will ever be caught.
+    if cleaned["pan"] and cleaned["gstin"]:
+        inside = cleaned["gstin"][2:12]
+        if inside != cleaned["pan"]:
+            raise ValueError(
+                f"The GSTIN carries PAN {inside}, but the PAN field says "
+                f"{cleaned['pan']}. A GSTIN always contains the holder's PAN, "
+                f"so one of the two is wrong.")
+
+    if cleaned["email"] and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+                                         cleaned["email"]):
+        raise ValueError(f"{cleaned['email']!r} does not look like an e-mail "
+                         f"address.")
+
+    try:
+        month = int(cleaned["fy_start_month"] or 4)
+    except ValueError:
+        raise ValueError("The financial year must begin in a month.") from None
+    if not 1 <= month <= 12:
+        raise ValueError("The financial year must begin in a month, 1 to 12.")
+    cleaned["fy_start_month"] = str(month)
+
+    if cleaned["books_begin"]:
+        try:
+            date.fromisoformat(cleaned["books_begin"])
+        except ValueError:
+            raise ValueError(
+                f"{cleaned['books_begin']!r} is not a date (expected "
+                f"YYYY-MM-DD).") from None
+
+    if not cleaned["currency"]:
+        cleaned["currency"] = DEFAULT_SETTINGS["currency"]
+    return cleaned
+
+
+def save_company(values: dict[str, str]) -> dict[str, str]:
+    """Validate, then store. Nothing is written if anything is wrong."""
+    cleaned = validate_company(values)
+    with connect() as conn:
+        for key, value in cleaned.items():
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+    return cleaned
+
+
+def company_display_name() -> str:
+    """The name to print: the mailing name if one is set, else the company."""
+    company = get_company()
+    return company["mailing_name"] or company["company_name"]
 
 
 # --------------------------------------------------------------------------- #
