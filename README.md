@@ -39,12 +39,16 @@ Tally for data entry. The desktop app is for entry; use either for reports.
 | --- | --- |
 | **Light** | The default. Dark text on white, on the platform's own widget style. |
 | **Dark** | Dark grey ground, light text, with the status colours lifted so they stay readable. |
-| **Tally classic** | The DOS-era Tally screen: deep blue `#000080`, cream text, cyan selection bar. |
+| **Bookkeeper Classic** | The DOS-era accounting screen: deep blue `#000080`, cream text, cyan selection bar. |
 | **TallyPrime light** | Tally as it looks today: light body, a blue-grey band behind the headers, the yellow highlight row. |
 | **Follow Windows** | Matches the OS light/dark setting. |
 
-There are two Tally schemes because Tally has had two looks: the inky blue DOS
-screen of 4.5 through 9, and the light one TallyPrime uses now.
+Two schemes share that blue lineage because the look has had two eras: the inky
+DOS screen, and the light one TallyPrime uses now.
+
+Renamed scheme keys are honoured on the way in — `color_scheme` saved as
+`tally` still opens **Bookkeeper Classic** — so renaming a scheme never
+silently resets someone's choice. The map is `theme.ALIASES`.
 
 The choice is saved in the books (`color_scheme` in the `settings` table), so it
 survives a restart and travels with the data file. Switching repaints

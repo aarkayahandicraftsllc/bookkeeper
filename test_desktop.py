@@ -297,6 +297,9 @@ check("every offered scheme has a label",
       all(theme.LABELS.get(k) for k in theme.ORDER), True)
 check("an unknown saved value falls back rather than crashing",
       theme.resolve("chartreuse").key, theme.DEFAULT)
+for old, new in theme.ALIASES.items():
+    check(f"a preference saved as {old!r} still opens {new!r}",
+          theme.resolve(old).key, new)
 check("auto resolves to a real scheme",
       theme.resolve(theme.AUTO).key in theme.SCHEMES, True)
 try:

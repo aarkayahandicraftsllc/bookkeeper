@@ -100,10 +100,10 @@ SCHEMES: dict[str, Scheme] = {
         highlight_text="#202124",
         border="#3c4043",
     ),
-    "tally": Scheme(
-        key="tally",
-        label="Tally classic",
-        # The DOS-era Tally screen: deep blue ground, cream text, cyan bar.
+    "classic": Scheme(
+        key="classic",
+        label="Bookkeeper Classic",
+        # The DOS-era accounting screen: deep blue ground, cream text, cyan bar.
         window="#000080",
         base="#0000a0",
         alt_base="#000090",
@@ -136,9 +136,14 @@ SCHEMES: dict[str, Scheme] = {
 }
 
 # Order shown in the Settings menu. AUTO last, since it is a rule rather than
-# a scheme. The two Tally schemes sit together: the DOS-era blue and the way
-# Tally looks today.
-ORDER = ("light", "dark", "tally", "tallyprime", AUTO)
+# a scheme. The two blue-lineage schemes sit together: the DOS-era screen and
+# the way TallyPrime looks today.
+ORDER = ("light", "dark", "classic", "tallyprime", AUTO)
+
+# Keys that have been renamed. A saved preference is a stored value, so an old
+# one must keep working rather than silently resetting to Light: "tally" was
+# the key before the scheme was named Bookkeeper Classic (2026-10-16).
+ALIASES = {"tally": "classic"}
 
 LABELS = {key: SCHEMES[key].label for key in SCHEMES} | {
     AUTO: "Follow Windows",
@@ -184,8 +189,15 @@ def detect_os_scheme() -> str:
 
 
 def resolve(key: str) -> Scheme:
-    """Turn a stored preference into a scheme. Unknown keys fall back."""
+    """Turn a stored preference into a scheme.
+
+    Renamed keys are honoured, so a preference saved under an old name still
+    opens in the scheme the user chose. Anything genuinely unknown falls back
+    to the default rather than raising - a bad settings row should not stop the
+    app from opening.
+    """
     key = (key or "").strip().lower()
+    key = ALIASES.get(key, key)
     if key == AUTO:
         key = detect_os_scheme()
     return SCHEMES.get(key, SCHEMES[DEFAULT])
