@@ -116,11 +116,13 @@ SCHEMES: dict[str, Scheme] = {
         highlight_text="#000080",
         border="#6a6ac8",
     ),
-    "tallyprime": Scheme(
-        key="tallyprime",
-        label="TallyPrime light",
-        # Tally as it looks today: a light body rather than a blue ground, a
-        # blue-grey band behind the headers, and the yellow highlight row.
+    "bookkeeper_light": Scheme(
+        key="bookkeeper_light",
+        label="Bookkeeper Light",
+        # The modern accounting-screen look: a light body rather than a blue
+        # ground, a blue-grey band behind the headers, a yellow highlight row.
+        # Distinct from the plain Light scheme, which is simply the platform's
+        # own grey-and-white with no banding.
         window="#eef2f7",
         base="#ffffff",
         alt_base="#dbe5f1",
@@ -136,14 +138,17 @@ SCHEMES: dict[str, Scheme] = {
 }
 
 # Order shown in the Settings menu. AUTO last, since it is a rule rather than
-# a scheme. The two blue-lineage schemes sit together: the DOS-era screen and
-# the way TallyPrime looks today.
-ORDER = ("light", "dark", "classic", "tallyprime", AUTO)
+# a scheme. The two Bookkeeper schemes sit together: the DOS-era screen and
+# the modern one.
+ORDER = ("light", "dark", "classic", "bookkeeper_light", AUTO)
 
 # Keys that have been renamed. A saved preference is a stored value, so an old
-# one must keep working rather than silently resetting to Light: "tally" was
-# the key before the scheme was named Bookkeeper Classic (2026-10-16).
-ALIASES = {"tally": "classic"}
+# one must keep working rather than silently resetting to Light. Both of these
+# date from 2026-10-16, when the two schemes were renamed off the Tally name.
+ALIASES = {
+    "tally": "classic",                 # was "Tally classic"
+    "tallyprime": "bookkeeper_light",   # was "TallyPrime light"
+}
 
 LABELS = {key: SCHEMES[key].label for key in SCHEMES} | {
     AUTO: "Follow Windows",
