@@ -484,6 +484,83 @@ check("peeking reads the name without opening it",
       db.peek_company(first)["company_name"], "First Company")
 db.use_company(pinned)
 
+print("\nBackups")
+
+import sqlite3 as _sqlite3  # noqa: E402  (only this section needs it)
+
+before = db.backups_for()
+first_backup = db.backup_company(tag="manual")
+check("a backup is written", first_backup is not None and first_backup.exists(),
+      True)
+check("it is named for the company it came from",
+      first_backup.name.startswith(Path(db.DB_PATH).stem + "-"), True)
+check("it lands in the backup folder, not beside the books",
+      first_backup.parent, db.backup_dir())
+check("and it is listed for that company",
+      first_backup in db.backups_for(), True)
+
+# The point of a backup is that it opens. A file copy taken mid-write passes
+# every check except this one.
+conn = _sqlite3.connect(f"file:{first_backup}?mode=ro", uri=True)
+check("the backup passes SQLite's own integrity check",
+      conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+check("it holds the same vouchers as the live books",
+      conn.execute("SELECT COUNT(*) FROM vouchers").fetchone()[0],
+      len(db.get_vouchers()))
+conn.close()
+
+# Opening the app repeatedly without entering anything must not push the
+# useful copies out with identical ones.
+check("an unchanged book is not copied again",
+      db.backup_company(tag="open"), None)
+check("so the count is unchanged", len(db.backups_for()), len(before) + 1)
+
+post("Journal", 20, "something to change the books",
+     ("Cash", 1.0, 0), ("Sales", 0, 1.0))
+second = db.backup_company(tag="open")
+check("a changed book IS copied again", second is not None, True)
+check("and the newest is the one just written", db.backups_for()[0], second)
+
+# The dedup above only works because each backup carries the hash of the books
+# it came from. SQLite's backup rebuilds the file page by page, so the copy is
+# logically identical but not byte-identical and its own hash says nothing.
+check("the backup records the hash of the books it came from",
+      db.backup_source_digest(second), db._digest(db.DB_PATH))
+check("that is NOT the hash of the backup file itself",
+      db.backup_source_digest(second) == db._digest(second), False)
+conn = _sqlite3.connect(f"file:{second}?mode=ro", uri=True)
+stamped = dict(conn.execute("SELECT key, value FROM settings").fetchall())
+conn.close()
+check("and says which file and when", stamped.get(db.ORIGIN_KEY),
+      Path(db.DB_PATH).name)
+check("the time it was taken is recorded",
+      stamped.get(db.TAKEN_KEY, "").startswith(str(date.today())), True)
+check("a file that is not one of ours is handled, not crashed on",
+      db.backup_source_digest(db.DATA_DIR / "nothing-here.db"), "")
+
+# A backup must never be mistaken for a company. The folder guard is what
+# does it here - the name-based guard only covers the older flat files.
+check("the backup folder is not listed as a company",
+      any("backups" in c["file"] for c in db.list_companies()), False)
+check("nor are the files inside it",
+      [c for c in db.list_companies()
+       if Path(c["file"]).stem.startswith(Path(db.DB_PATH).stem + "-")], [])
+
+# Pruning keeps the newest and must not reach into another company's.
+other = db.create_company({"company_name": "Backup Neighbour"})
+db.backup_company(other, tag="manual")
+mine = db.DATA_DIR / (Path(db.DB_PATH).stem + ".db")
+db.use_company(pinned)
+for _ in range(4):
+    post("Journal", 21, "more", ("Cash", 1.0, 0), ("Sales", 0, 1.0))
+    db.backup_company(tag="open")
+kept = db.prune_backups(keep=2)
+check("pruning drops the older copies", len(db.backups_for()), 2)
+check("it reports what it dropped", len(kept) > 0, True)
+check("the neighbour's backup is untouched", len(db.backups_for(other)), 1)
+check("and the newest copy survived pruning",
+      db.backups_for()[0].exists(), True)
+
 print("\nFinancial years")
 
 # The arithmetic, worked by hand. An April year running 2026-27 covers

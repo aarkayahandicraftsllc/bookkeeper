@@ -689,6 +689,59 @@ window.voucher.reset()
 settle()
 check("resetting clears it again", window.part_entered_rows(), [])
 
+print("\n20) Backing up, on open and on demand")
+db.use_company(TMP)
+window.company_file = Path(db.DB_PATH)
+for stale in db.backups_for():
+    stale.unlink()
+
+# What main() does before the window is shown.
+window.backup_on_open()
+opened = db.backups_for()
+check("opening the app takes a backup", len(opened), 1)
+check("it is tagged as an open-time copy", "-open" in opened[0].name, True)
+
+# Opening again with nothing entered must not bury the useful copies.
+window.backup_on_open()
+check("opening again with nothing changed adds nothing",
+      len(db.backups_for()), 1)
+
+# Company > Back up now. The dialogs it raises are suppressed, since a modal
+# box would stop the suite dead waiting for a click.
+_boxes = []
+QtWidgets.QMessageBox.information = staticmethod(
+    lambda *a, **k: _boxes.append(a[1:]) or QtWidgets.QMessageBox.Ok)
+QtWidgets.QMessageBox.warning = staticmethod(
+    lambda *a, **k: _boxes.append(("WARNING",) + a[1:])
+    or QtWidgets.QMessageBox.Ok)
+
+window.backup_now()
+check("a manual backup with nothing changed says so rather than claiming to "
+      "have written one",
+      any("Already backed up" in str(b[0]) for b in _boxes), True)
+check("and wrote nothing", len(db.backups_for()), 1)
+
+_boxes.clear()
+window.voucher.reset()
+db.save_voucher(voucher_type="Journal", voucher_date=date.today(),
+                narration="change the books",
+                lines=[{"ledger_id": db.ledger_id("Cash"), "debit": 7,
+                        "credit": 0},
+                       {"ledger_id": db.ledger_id("Sales"), "debit": 0,
+                        "credit": 7}])
+window.backup_now()
+check("a manual backup after a change writes one", len(db.backups_for()), 2)
+check("it is tagged as manual", "-manual" in db.backups_for()[0].name, True)
+check("and it reports where it went",
+      any("Backed up" in str(b[0]) for b in _boxes), True)
+check("no warning was raised at any point",
+      [b for b in _boxes if b[0] == "WARNING"], [])
+
+# A backup must never show up as a company to open.
+check("backups are not offered as companies",
+      [c for c in db.list_companies() if "-open" in c["file"]
+       or "-manual" in c["file"]], [])
+
 # The real data folder must be untouched by any of this.
 check("the suite wrote only into its sandbox",
       str(db.DATA_DIR).startswith(str(Path(tempfile.gettempdir()))), True)

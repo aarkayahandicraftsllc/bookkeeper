@@ -1760,6 +1760,17 @@ class MainWindow(QtWidgets.QMainWindow):
         new_company.triggered.connect(self.new_company)
         company_menu.addAction(new_company)
 
+        company_menu.addSeparator()
+        backup = QtGui.QAction("Back up now\tCtrl+B", self)
+        backup.setShortcut(QtGui.QKeySequence("Ctrl+B"))
+        backup.setToolTip("Copy these books into the backup folder. One is "
+                          "also taken automatically every time the app opens.")
+        backup.triggered.connect(self.backup_now)
+        company_menu.addAction(backup)
+        open_folder = QtGui.QAction("Open backup folder", self)
+        open_folder.triggered.connect(self.open_backup_folder)
+        company_menu.addAction(open_folder)
+
         settings_menu = bar.addMenu("&Settings")
 
         size_menu = settings_menu.addMenu("&Text size")
@@ -1990,6 +2001,57 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.No)
         return answer == QtWidgets.QMessageBox.Yes
 
+    # --- backups ---------------------------------------------------------- #
+    def backup_on_open(self) -> None:
+        """Copy the books before this session touches them.
+
+        Silent when it works: an automatic safety net is not news, and a
+        message here would displace the opening-balance warning the status bar
+        has just put up. LOUD when it fails, though - a backup you believe is
+        being taken and is not is the exact shape of the data loss this
+        project has already had once, and it stayed invisible because nothing
+        ever said otherwise.
+        """
+        try:
+            db.backup_company(self.company_file, tag="open")
+        except Exception as exc:                      # noqa: BLE001
+            QtWidgets.QMessageBox.warning(
+                self, "Could not back up",
+                f"These books were NOT backed up when the app opened:\n\n"
+                f"{exc}\n\nYour books are fine and you can carry on. Try "
+                f"Company > Back up now, and check there is room on the disk.")
+
+    def backup_now(self) -> None:
+        """Company > Back up now, for before you do something you are unsure
+        about."""
+        try:
+            made = db.backup_company(self.company_file, tag="manual")
+        except Exception as exc:                      # noqa: BLE001
+            QtWidgets.QMessageBox.warning(
+                self, "Could not back up", f"Nothing was written:\n\n{exc}")
+            return
+        kept = len(db.backups_for(self.company_file))
+        if made is None:
+            # Not a failure, and saying "done" would be a lie - so say which.
+            QtWidgets.QMessageBox.information(
+                self, "Already backed up",
+                "These books have not changed since the last backup, so "
+                f"nothing new was written.\n\n{kept} backup(s) kept in:\n"
+                f"{db.backup_dir()}")
+            return
+        self.statusBar().showMessage(f"Backed up to {made.name}", 6000)
+        QtWidgets.QMessageBox.information(
+            self, "Backed up",
+            f"{db.company_display_name()} copied to:\n\n{made}\n\n"
+            f"{kept} backup(s) kept; the oldest are dropped beyond "
+            f"{db.KEEP_BACKUPS}.")
+
+    def open_backup_folder(self) -> None:
+        folder = db.backup_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        QtGui.QDesktopServices.openUrl(
+            QtCore.QUrl.fromLocalFile(str(folder)))
+
     def _company_changed(self) -> None:
         """Company details were saved: the title and every figure can change,
         since the currency symbol and the financial year both live there."""
@@ -2073,6 +2135,10 @@ def main() -> int:
     # different database.
     while True:
         window = MainWindow()
+        # Before anything is entered: whatever this session does, the books as
+        # they were on opening are already safe on disk. Also covers switching
+        # company, which comes back round this loop.
+        window.backup_on_open()
         window.show()
         if ask_on_open:
             # After the window is up and painted, not before it.

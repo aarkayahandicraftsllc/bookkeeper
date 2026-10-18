@@ -20,6 +20,7 @@ Everything is stored debit-positive internally: a signed balance of +500 means
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sqlite3
@@ -357,6 +358,167 @@ def company_files() -> list[Path]:
              if not any(mark in path.name.lower() for mark in _NOT_COMPANIES)
              and not path.name.startswith(".")]
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+# --------------------------------------------------------------------------- #
+# backups
+# --------------------------------------------------------------------------- #
+# A company is one file, which is what makes a backup a copy rather than an
+# export. They go in a SUBFOLDER: company_files() globs ``*.db`` without
+# recursing, so nothing in here can ever be mistaken for a company no matter
+# what it is called - the name-based guard above protects the older
+# ``books.backup-....db`` that already sat in the data folder.
+BACKUP_DIR = DATA_DIR / "backups"
+
+# Generous, because these are tens of kilobytes rather than the 144 MB the exe
+# archive has to live with. Twenty sessions back is far enough to notice that
+# something went wrong days ago.
+KEEP_BACKUPS = 20
+
+_STAMP = "%Y%m%d-%H%M%S"
+
+
+def backup_dir() -> Path:
+    return BACKUP_DIR
+
+
+def _digest(path: Path) -> str:
+    """A content hash, read in chunks so a large file is not held in memory."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(65536), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+# Written INTO each backup, recording the books it was made from. A backup is
+# produced by SQLite's own backup API, which rebuilds the file page by page -
+# so the copy is logically identical but NOT byte-identical to its source, and
+# hashing the copy can never tell you which books it came from. The source
+# hash therefore has to be carried, not recomputed.
+SOURCE_KEY = "backup_source_sha256"
+TAKEN_KEY = "backup_taken_at"
+ORIGIN_KEY = "backup_source_file"
+
+_NAME_TIME = re.compile(r"-(\d{8}-\d{6})")
+
+
+def _backup_order(path: Path):
+    """Sort key: the timestamp in the NAME first, the real mtime to break ties.
+
+    The name is what survives being copied to a USB stick or restored from
+    one, so it leads. Two backups taken in the same second cannot be told
+    apart by name - and the suffix that keeps them from overwriting each other
+    sorts the wrong way round, "-open-2.db" before "-open.db" - so the
+    filesystem's nanosecond mtime settles it.
+    """
+    found = _NAME_TIME.search(path.name)
+    return (found.group(1) if found else "", path.stat().st_mtime_ns)
+
+
+def backups_for(path=None) -> list[Path]:
+    """Backups of one company, newest first.
+
+    Matched with a strict pattern rather than a ``stem-*`` glob: a company
+    called "books" and one called "books extra" would otherwise collect each
+    other's backups, and pruning would then delete the wrong company's.
+    """
+    source = Path(path or DB_PATH)
+    if not BACKUP_DIR.exists():
+        return []
+    pattern = re.compile(
+        rf"^{re.escape(source.stem)}-\d{{8}}-\d{{6}}(-[a-z]+)?(-\d+)?\.db$")
+    found = [p for p in BACKUP_DIR.glob("*.db") if pattern.match(p.name)]
+    return sorted(found, key=_backup_order, reverse=True)
+
+
+def backup_source_digest(path: Path) -> str:
+    """The hash of the books a backup was taken from, as recorded inside it."""
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return ""
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?",
+                           (SOURCE_KEY,)).fetchone()
+        return row[0] if row else ""
+    except sqlite3.Error:
+        return ""        # not one of ours, or too old to carry the hash
+    finally:
+        conn.close()
+
+
+def prune_backups(path=None, keep: int = KEEP_BACKUPS) -> list[Path]:
+    """Drop all but the newest ``keep`` backups of one company.
+
+    Each failure is swallowed on purpose. Windows will refuse to delete a file
+    something else has open, and a backup folder someone is browsing must not
+    be able to stop a backup from being taken - it prunes on a later run.
+    """
+    dropped = []
+    for old in backups_for(path)[keep:]:
+        try:
+            old.unlink()
+            dropped.append(old)
+        except OSError:
+            pass
+    return dropped
+
+
+def backup_company(path=None, tag: str = "manual") -> Path | None:
+    """Copy a company's books into the backup folder. Returns the file written.
+
+    Returns **None** when the books are byte-for-byte what the newest backup
+    already holds: opening the app five times without entering anything should
+    not leave five identical copies and push the useful ones out.
+
+    Uses SQLite's own online backup rather than a file copy. A plain copy taken
+    while a write is in flight can capture a torn database, and the copy looks
+    perfectly fine right up to the day you need it.
+    """
+    source = Path(path or DB_PATH)
+    if not source.exists():
+        return None
+
+    digest = _digest(source)
+    newest = backups_for(source)
+    # Against the hash the newest backup CARRIES, never against the hash of
+    # the backup file itself: see SOURCE_KEY above.
+    if newest and backup_source_digest(newest[0]) == digest:
+        return None
+
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime(_STAMP)
+    target = BACKUP_DIR / f"{source.stem}-{stamp}-{tag}.db"
+    # Two backups within the same second would otherwise overwrite each other.
+    spare = 2
+    while target.exists():
+        target = BACKUP_DIR / f"{source.stem}-{stamp}-{tag}-{spare}.db"
+        spare += 1
+
+    src = sqlite3.connect(source)
+    try:
+        dst = sqlite3.connect(target)
+        try:
+            src.backup(dst)
+            # Stamped into the copy, not kept in an index beside it: an index
+            # is one more thing that can fall out of step with the folder, and
+            # a backup that travels on its own should still be able to say
+            # which books it came from and when.
+            dst.executemany(
+                "INSERT INTO settings (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [(SOURCE_KEY, digest),
+                 (TAKEN_KEY, datetime.now().isoformat(timespec="seconds")),
+                 (ORIGIN_KEY, source.name)])
+            dst.commit()
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+    prune_backups(source)
+    return target
 
 
 def peek_settings(path, keys: tuple[str, ...]) -> dict[str, str]:

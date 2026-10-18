@@ -170,6 +170,59 @@ A few details worth knowing:
   a browser tab has no launch moment. It creates nothing; use the desktop app
   for that.
 
+## Backups
+
+Copies of the books live in **`data/backups/`**, named for the company they
+came from and when they were taken:
+
+```
+data/backups/books-20261018-150337-open.db
+data/backups/books-20261018-145823-manual.db
+```
+
+**One is taken every time the desktop app opens**, before anything is entered,
+so whatever a session does the books as they were are already safe. Switching
+company (`F3`) takes one of the company being opened too, since that comes back
+round the same loop in `main()`.
+
+**Company ▸ Back up now** (`Ctrl+B`) takes one on demand — for before you do
+something you are unsure about. **Company ▸ Open backup folder** opens it in
+Explorer. Streamlit gets the button but not the automatic copy: it re-runs the
+whole script on every interaction, so "on open" has no meaning in a browser tab
+and hooking it there would copy the books on every click.
+
+The last **20** per company are kept (`db.KEEP_BACKUPS`) and older ones pruned.
+These are tens of kilobytes, unlike the 144 MB the exe archive has to ration.
+A prune that cannot delete a file gives up on that file rather than failing —
+Windows will refuse to delete what something else has open, and a backup folder
+you happen to be browsing must not be able to stop a backup being taken.
+
+Three things about how it works that are not obvious:
+
+* **It uses SQLite's own online backup, not a file copy.** A copy taken while a
+  write is in flight can capture a torn database, and it looks perfectly fine
+  right up to the day you need it. `test_books.py` runs `PRAGMA
+  integrity_check` on a backup and compares its voucher count with the live
+  books, because "a file appeared" is not the same as "a backup exists".
+* **Each backup carries the hash of the books it came from**, stamped into its
+  own `settings` table as `backup_source_sha256`, alongside which file and when.
+  This is what lets an unchanged book be skipped instead of copied again —
+  opening the app five times without entering anything leaves one copy, not
+  five, so the useful ones are not pushed out. It has to be *carried* rather
+  than recomputed: the backup API rebuilds the file page by page, so the copy
+  is logically identical but **not byte-identical** to its source and hashing
+  the copy tells you nothing about where it came from.
+* **They sit in a subfolder so they can never be mistaken for a company.**
+  `company_files()` globs `*.db` without recursing, so the folder is invisible
+  to the picker whatever the files are called. The name-based guard
+  (`_NOT_COMPANIES`) still covers the older flat `books.backup-....db`.
+
+**What this does not protect against.** The backups are on the same disk as the
+books. They cover a mistake, a bad import or a corrupted file; they do **not**
+cover the drive failing, the laptop being lost, or the folder being deleted. For
+that, `data/` needs to be copied somewhere else — another drive, or a synced
+folder. Nothing in the app does that for you.
+
 ## Company details
 
 **Ctrl+8**, or Masters → Company in the browser version. Fifteen fields:

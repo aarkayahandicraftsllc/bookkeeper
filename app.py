@@ -50,6 +50,26 @@ if not db.DB_PINNED:
 
 db.init_db()
 
+# Backing up is a BUTTON here and not automatic, unlike the desktop app which
+# takes one as it opens. Streamlit re-runs this whole script on every single
+# interaction, so "on open" has no meaning in a browser tab - hooking it here
+# would copy the books on every click and bury the useful copies.
+if st.sidebar.button("Back up now", help="Copy these books into the backup "
+                                         "folder", key="backup_now"):
+    try:
+        _made = db.backup_company(tag="manual")
+    except Exception as _exc:                          # noqa: BLE001
+        st.sidebar.error(f"Nothing was written: {_exc}")
+    else:
+        if _made is None:
+            st.sidebar.info("Unchanged since the last backup — nothing new "
+                            "was written.")
+        else:
+            st.sidebar.success(f"Backed up to {_made.name}")
+_kept = db.backups_for()
+if _kept:
+    st.sidebar.caption(f"{len(_kept)} backup(s), newest {_kept[0].name}")
+
 COMPANY = db.get_setting("company_name", "My Company")
 CURRENCY = db.get_setting("currency", "₹")
 FY_START_MONTH = int(db.get_setting("fy_start_month", "4"))
