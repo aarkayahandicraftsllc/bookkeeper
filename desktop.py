@@ -725,6 +725,67 @@ class VoucherScreen(QtWidgets.QWidget):
 # --------------------------------------------------------------------------- #
 # report screens
 # --------------------------------------------------------------------------- #
+class PeriodDialog(QtWidgets.QDialog):
+    """Asks which dates a custom period runs between.
+
+    Choosing "Custom dates" used to do nothing at all: the dropdown changed
+    and the editors were left alone, so there was no sign the choice had been
+    registered and - worse - if "Since books began" had been chosen before it,
+    the From editor was still disabled and no start date could be set at all.
+
+    An as-at report is asked for ONE date, not two. A balance sheet is drawn
+    at a moment and its balances run from the beginning of the books whatever
+    you put in a start field, so offering one would be offering a control that
+    does nothing.
+    """
+
+    def __init__(self, start: date, end: date, with_from: bool = True,
+                 parent=None):
+        super().__init__(parent)
+        self.with_from = with_from
+        self.setWindowTitle("Custom dates" if with_from else "As at")
+        layout = QtWidgets.QVBoxLayout(self)
+
+        form = QtWidgets.QFormLayout()
+        self.from_edit = QtWidgets.QDateEdit(to_qdate(start))
+        self.to_edit = QtWidgets.QDateEdit(to_qdate(end))
+        for editor in (self.from_edit, self.to_edit):
+            editor.setCalendarPopup(True)
+            editor.setDisplayFormat("dd/MM/yyyy")
+        if with_from:
+            form.addRow("From", self.from_edit)
+            form.addRow("To", self.to_edit)
+        else:
+            form.addRow("As at", self.to_edit)
+        layout.addLayout(form)
+
+        self.note = muted(flowing(QtWidgets.QLabel(
+            "Any dates you like - a quarter, a month, part of a year."
+            if with_from else
+            "Balances are shown as they stood at the end of this day.")))
+        layout.addWidget(self.note)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _accept(self) -> None:
+        start, end = self.dates()
+        if start is not None and start > end:
+            QtWidgets.QMessageBox.warning(
+                self, "Dates the wrong way round",
+                "The From date is after the To date. A period cannot end "
+                "before it starts.")
+            return
+        self.accept()
+
+    def dates(self) -> tuple[date | None, date]:
+        return (from_qdate(self.from_edit.date()) if self.with_from else None,
+                from_qdate(self.to_edit.date()))
+
+
 class PeriodBar(QtWidgets.QWidget):
     """Which period a report covers: pick a financial year, or set dates.
 
@@ -742,7 +803,7 @@ class PeriodBar(QtWidgets.QWidget):
     changed = QtCore.Signal()
 
     SINCE = "Since books began"
-    CUSTOM = "Custom dates"
+    CUSTOM = "Custom dates…"
     # Marks the since-books-began entry. The years carry a FinancialYear and
     # Custom carries None, so the three are told apart by what they hold
     # rather than by their position in a list that changes with the data.
@@ -755,6 +816,9 @@ class PeriodBar(QtWidgets.QWidget):
         # watch for YOUR edits do not fire for ours - without it, choosing a
         # year would immediately flip the dropdown to Custom.
         self._quiet = False
+        # Which entry was in force before the current one, so that cancelling
+        # the custom-dates dialog can put the dropdown back.
+        self._last_index = 0
         row = QtWidgets.QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
 
@@ -815,12 +879,19 @@ class PeriodBar(QtWidgets.QWidget):
             current = acc.current_financial_year()
             index = max(0, self.year_box.findText(f"FY {current.label}"))
         self.year_box.setCurrentIndex(index)
+        self._last_index = index
         self._quiet = False
         self._apply(self.year_box.currentData())
 
-    def _year_chosen(self, _index: int) -> None:
+    def _year_chosen(self, index: int) -> None:
         if self._quiet:
             return
+        if self.year_box.currentData() is None:
+            # Custom: ask for the dates. _last_index is left alone so that
+            # cancelling can put the dropdown back where it was.
+            self._ask_custom()
+            return
+        self._last_index = index
         self._apply(self.year_box.currentData())
 
     def _apply(self, chosen) -> None:
@@ -830,6 +901,8 @@ class PeriodBar(QtWidgets.QWidget):
         the point of Custom is that you set them.
         """
         if chosen is None:
+            # Custom. Reached on a reload as well as a click, so it must not
+            # prompt - that is _ask_custom's job, called from the click only.
             self.changed.emit()
             return
         self._quiet = True
@@ -842,11 +915,36 @@ class PeriodBar(QtWidgets.QWidget):
             if self.with_from:
                 self.from_edit.setEnabled(True)
                 self.from_edit.setDate(to_qdate(chosen.start))
-            # The year in progress runs to TODAY, not to its close: a balance
-            # sheet dated next March, with nothing posted between, tells you
-            # nothing you did not already know.
-            self.to_edit.setDate(to_qdate(min(chosen.end, date.today())))
+            # The WHOLE fiscal year, opening day to closing day - including a
+            # closing day still in the future for the year in progress. A year
+            # in the dropdown means that year, and clamping the end to today
+            # quietly gave you a different period from the one named.
+            self.to_edit.setDate(to_qdate(chosen.end))
         self._quiet = False
+        self.changed.emit()
+
+    def _ask_custom(self) -> None:
+        """Ask for the dates, having been asked for a custom period."""
+        start = (from_qdate(self.from_edit.date()) if self.with_from
+                 else acc.current_financial_year().start)
+        dialog = PeriodDialog(start, from_qdate(self.to_edit.date()),
+                              self.with_from, self)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            # Nothing changed, so the dropdown must not read as though it did.
+            self._quiet = True
+            self.year_box.setCurrentIndex(self._last_index)
+            self._quiet = False
+            return
+        picked_start, picked_end = dialog.dates()
+        self._quiet = True
+        if self.with_from and picked_start is not None:
+            # Re-enabled explicitly: coming here from since-books-began leaves
+            # it disabled, which is what made custom dates unusable.
+            self.from_edit.setEnabled(True)
+            self.from_edit.setDate(to_qdate(picked_start))
+        self.to_edit.setDate(to_qdate(picked_end))
+        self._quiet = False
+        self._last_index = self.year_box.currentIndex()
         self.changed.emit()
 
     def _date_typed(self, *_) -> None:
@@ -861,7 +959,12 @@ class PeriodBar(QtWidgets.QWidget):
         if index >= 0 and self.year_box.currentIndex() != index:
             self._quiet = True
             self.year_box.setCurrentIndex(index)
+            self._last_index = index
             self._quiet = False
+        # Typing a date is the one way into a custom period that does not go
+        # through the dialog, so the From editor is re-enabled here too.
+        if self.with_from:
+            self.from_edit.setEnabled(True)
 
     def selected_year(self):
         """The chosen financial year, or None for custom or all dates."""

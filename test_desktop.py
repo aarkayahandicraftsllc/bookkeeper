@@ -560,12 +560,15 @@ check("and the report followed", bar.range()[1], last_year.end)
 check("the balance sheet still agrees in that year",
       "Both sides agree" in window.sheet.status.text(), True)
 
-# The year in progress is reported up to TODAY, not to a date in the future.
+# A year means the WHOLE year, opening day to closing day - including a
+# closing day still in the future for the year in progress. Clamping it to
+# today would quietly report a different period from the one named.
 current = acc.current_financial_year()
 bar.year_box.setCurrentText(f"FY {current.label}")
 settle()
-check("the year in progress runs only to today",
-      desktop.from_qdate(bar.to_edit.date()), date.today())
+check("the year in progress still runs to its closing day",
+      desktop.from_qdate(bar.to_edit.date()), current.end)
+check("which is in the future", current.end > date.today(), True)
 
 # A date typed by hand is no longer a whole year, and the dropdown must not
 # go on claiming that it is.
@@ -583,9 +586,10 @@ check("a period report offers since-books-began first",
       pl_labels[0], pl.SINCE)
 check("the P&L opens on a financial year, not on all dates",
       pl.selected_year() is not None, True)
-check("choosing a year fills both dates",
-      (desktop.from_qdate(pl.from_edit.date()), desktop.from_qdate(pl.to_edit.date())),
-      (current.start, date.today()))
+check("choosing a year fills both dates, start and end of it",
+      (desktop.from_qdate(pl.from_edit.date()),
+       desktop.from_qdate(pl.to_edit.date())),
+      (current.start, current.end))
 pl.year_box.setCurrentText(pl.SINCE)
 settle()
 check("since-books-began reports no start date", pl.range()[0], None)
@@ -741,6 +745,84 @@ check("no warning was raised at any point",
 check("backups are not offered as companies",
       [c for c in db.list_companies() if "-open" in c["file"]
        or "-manual" in c["file"]], [])
+
+print("\n21) Custom dates ask for the dates")
+db.use_company(TMP)
+bar = window.profit.period                 # a period report: From and To
+year = acc.current_financial_year()
+bar.year_box.setCurrentText(f"FY {year.label}")
+settle()
+
+# The dialog, on its own. An as-at report must be asked for ONE date: a start
+# field on a balance sheet would be a control that does nothing.
+two = desktop.PeriodDialog(date(2026, 4, 1), date(2026, 6, 30), with_from=True)
+check("a period report is asked for both dates", two.dates(),
+      (date(2026, 4, 1), date(2026, 6, 30)))
+one = desktop.PeriodDialog(date(2026, 4, 1), date(2026, 6, 30),
+                           with_from=False)
+check("an as-at report is asked for one", one.dates(),
+      (None, date(2026, 6, 30)))
+check("and its From editor is not shown", one.from_edit.isHidden(), True)
+
+# A period cannot end before it starts.
+_warned = []
+_real_warning = QtWidgets.QMessageBox.warning
+QtWidgets.QMessageBox.warning = staticmethod(
+    lambda *a, **k: _warned.append(a[1:]) or QtWidgets.QMessageBox.Ok)
+backwards = desktop.PeriodDialog(date(2026, 6, 30), date(2026, 4, 1))
+backwards._accept()
+check("dates the wrong way round are refused", len(_warned), 1)
+check("and the dialog stays open", backwards.result(), 0)
+QtWidgets.QMessageBox.warning = _real_warning
+
+# Driven through the bar. exec() is stubbed because a modal dialog would stop
+# the suite dead waiting for a click.
+_real_exec = desktop.PeriodDialog.exec
+
+
+def _accept_with(start, end):
+    def stub(self):
+        if start is not None and self.with_from:
+            self.from_edit.setDate(desktop.to_qdate(start))
+        self.to_edit.setDate(desktop.to_qdate(end))
+        return QtWidgets.QDialog.DialogCode.Accepted
+    return stub
+
+
+desktop.PeriodDialog.exec = _accept_with(date(2026, 5, 1), date(2026, 5, 31))
+bar.year_box.setCurrentText(bar.CUSTOM)
+settle()
+check("choosing custom dates puts them in the editors",
+      (desktop.from_qdate(bar.from_edit.date()),
+       desktop.from_qdate(bar.to_edit.date())),
+      (date(2026, 5, 1), date(2026, 5, 31)))
+check("and the report runs on them", bar.range(),
+      (date(2026, 5, 1), date(2026, 5, 31)))
+check("the dropdown says custom", bar.year_box.currentText(), bar.CUSTOM)
+
+# THE BUG THIS FIXES: coming from since-books-began left the From editor
+# disabled, so a custom period could never be given a start date.
+bar.year_box.setCurrentText(bar.SINCE)
+settle()
+check("since-books-began disables From", bar.from_edit.isEnabled(), False)
+desktop.PeriodDialog.exec = _accept_with(date(2026, 4, 10), date(2026, 4, 20))
+bar.year_box.setCurrentText(bar.CUSTOM)
+settle()
+check("custom dates after it re-enables From", bar.from_edit.isEnabled(), True)
+check("and the start date is actually used", bar.range()[0], date(2026, 4, 10))
+
+# Cancelling must leave both the period and the dropdown as they were.
+bar.year_box.setCurrentText(f"FY {year.label}")
+settle()
+was = bar.range()
+desktop.PeriodDialog.exec = (
+    lambda self: QtWidgets.QDialog.DialogCode.Rejected)
+bar.year_box.setCurrentText(bar.CUSTOM)
+settle()
+check("cancelling leaves the dates alone", bar.range(), was)
+check("and puts the dropdown back", bar.year_box.currentText(),
+      f"FY {year.label}")
+desktop.PeriodDialog.exec = _real_exec
 
 # The real data folder must be untouched by any of this.
 check("the suite wrote only into its sandbox",

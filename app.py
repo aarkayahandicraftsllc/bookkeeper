@@ -124,10 +124,11 @@ FY_START, FY_END = acc.fy_bounds(date.today(), FY_START_MONTH)
 def year_periods() -> dict[str, tuple[date, date]]:
     """Each financial year in the books, as a pickable period.
 
-    The year in progress runs to TODAY rather than to its close - a report
-    dated months into the future shows nothing the present one does not.
+    The WHOLE year, opening day to closing day, even when the closing day is
+    still in the future: a year named in a dropdown has to mean that year, and
+    clamping the end to today quietly reports a different period.
     """
-    return {f"FY {year.label}": (year.start, min(year.end, date.today()))
+    return {f"FY {year.label}": (year.start, year.end)
             for year in acc.financial_years()}
 
 
@@ -142,12 +143,12 @@ def as_at_picker(key: str, label: str = "Financial year") -> date:
     reaching it by typing a date is needless work.
     """
     closes = {name: end for name, (_, end) in year_periods().items()}
-    names = list(closes) + ["Custom date"]
+    names = list(closes) + ["Custom date…"]
     index = names.index(default_year()) if default_year() in names else 0
     left, right = st.columns([2, 2])
     with left:
         choice = st.selectbox(label, names, index=index, key=f"{key}_year")
-    if choice == "Custom date":
+    if choice == "Custom date…":
         with right:
             return st.date_input("As at", value=date.today(),
                                  format="DD/MM/YYYY", key=f"{key}_asat")
@@ -163,7 +164,7 @@ def period_picker(key: str, allow_all: bool = True) -> tuple[date | None, date]:
     options = {
         **year_periods(),
         "This month": (month_start, min(month_end, date.today())),
-        "Custom": None,
+        "Custom dates…": None,
     }
     if allow_all:
         options = {"Since books began": (None, date.today()), **options}
@@ -174,7 +175,7 @@ def period_picker(key: str, allow_all: bool = True) -> tuple[date | None, date]:
     with left:
         choice = st.selectbox("Period", names, index=index,
                               key=f"{key}_period")
-    if choice == "Custom":
+    if choice == "Custom dates…":
         with right:
             picked = st.date_input(
                 "From / to", value=(FY_START, date.today()),

@@ -322,9 +322,10 @@ books touch — `FY 2025-2026`, `FY 2026-2027` — so "the balance sheet for
 2025-2026" is one choice rather than two typed dates. The From/To editors stay
 beside it for a period that is not a whole year.
 
-The year in progress is reported **up to today**, not to its close: a balance
-sheet dated next March, with nothing posted between, tells you nothing the
-present one does not. A closed year reports to its last day.
+A year means the **whole** year, opening day to closing day — including a
+closing day still in the future for the year in progress. A year named in a
+dropdown has to mean that year; clamping the end to today, as this first did,
+quietly reports a different period from the one on screen.
 
 The list comes from the **data** — voucher dates and the books-begin date — so
 it grows by itself and there is nothing to maintain. The year before the
@@ -338,7 +339,20 @@ A financial year is **not** assumed to start in April. It follows
 are a different shape rather than a special case: the year ends in December of
 its own year and is labelled `2026`, since `2026-2026` would be nonsense.
 
-Editing a date by hand moves the dropdown to **Custom dates**. Leaving it
+**Custom dates…** asks for them. A period report is asked for a From and a To;
+an as-at report is asked for one date, because a balance sheet is drawn at a
+moment and its balances run from the beginning of the books whatever you put in
+a start field — offering one would be offering a control that does nothing. The
+dialog refuses a period that ends before it starts, and cancelling leaves both
+the dates and the dropdown exactly as they were.
+
+Choosing it used to do nothing at all: the dropdown changed, the editors were
+left alone, and if **Since books began** had been chosen first the From editor
+was still disabled, so a custom period could never be given a start date.
+Typing in the date editors is the other way in, and it re-enables From for the
+same reason.
+
+Editing a date by hand also moves the dropdown to **Custom dates…**. Leaving it
 reading "FY 2026-2027" over a period that is no longer that year would be a
 lie about what you are looking at — and the one thing a report must not do is
 misdescribe its own period. Period reports (Day Book, Ledger, P&L) also carry
