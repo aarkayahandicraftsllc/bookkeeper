@@ -6,6 +6,8 @@ Run with:  streamlit run app.py
 from __future__ import annotations
 
 import calendar
+import csv
+import io
 from datetime import date, timedelta
 
 import pandas as pd
@@ -154,6 +156,30 @@ def as_at_picker(key: str, label: str = "Financial year") -> date:
                                  format="DD/MM/YYYY", key=f"{key}_asat")
     st.caption(f"As at {closes[choice].strftime('%d/%m/%Y')}")
     return closes[choice]
+
+
+def sections_csv(title: str, period: str,
+                 sections: list[tuple[str, "pd.DataFrame"]]) -> bytes:
+    """A multi-table report as one CSV.
+
+    A CSV holds one table, so a report with four of them has to be laid out
+    rather than dumped: blank lines and headings are what let a reader tell
+    where the trading account ends and the indirect one begins. The desktop
+    app writes the same shape.
+    """
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerows([[title], [COMPANY], [period], []])
+    for heading, frame in sections:
+        writer.writerow([heading])
+        if frame.empty:
+            writer.writerow(["(nothing to show)"])
+        else:
+            writer.writerow(list(frame.columns))
+            for row in frame.itertuples(index=False):
+                writer.writerow(["" if pd.isna(v) else v for v in row])
+        writer.writerow([])
+    return out.getvalue().encode("utf-8-sig")
 
 
 def period_picker(key: str, allow_all: bool = True) -> tuple[date | None, date]:
@@ -578,6 +604,22 @@ with tab_pl:
     st.markdown(
         f"#### {'Net profit' if totals['net_profit'] >= 0 else 'Net loss'}: "
         f"{money(abs(totals['net_profit']))}")
+    st.download_button(
+        "⬇️ Profit & Loss CSV",
+        data=sections_csv(
+            "Profit & Loss",
+            ("since the books began to "
+             f"{pl_to.strftime('%d/%m/%Y')}" if pl_from is None else
+             f"{pl_from.strftime('%d/%m/%Y')} to "
+             f"{pl_to.strftime('%d/%m/%Y')}"),
+            [("Trading account - purchases and direct expenses",
+              report["trading_expense"]),
+             ("Trading account - sales and direct incomes",
+              report["trading_income"]),
+             ("Indirect expenses", report["indirect_expense"]),
+             ("Indirect incomes", report["indirect_income"])]),
+        file_name=f"profit_and_loss_{date.today().isoformat()}.csv",
+        mime="text/csv", key="pl_csv")
 
 # --------------------------------------------------------------------------- #
 with tab_bs:
@@ -595,6 +637,14 @@ with tab_bs:
     else:
         st.error("The two sides do not agree — that should be impossible, "
                  "please report it.")
+
+    st.download_button(
+        "⬇️ Balance Sheet CSV",
+        data=sections_csv("Balance Sheet", f"as at {bs_as_at}",
+                          [("Liabilities", sheet["liabilities"]),
+                           ("Assets", sheet["assets"])]),
+        file_name=f"balance_sheet_{bs_as_at}.csv", mime="text/csv",
+        key="bs_csv")
 
     left, right = st.columns(2)
     with left:

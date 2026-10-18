@@ -28,7 +28,11 @@ setting. Build fonts with ``mono_font()`` / ``heading()``, not ``QFont(...)``.
 from __future__ import annotations
 
 import calendar
+import csv
+import html
+import re
 import sys
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
@@ -239,6 +243,285 @@ def tone(label: QtWidgets.QLabel, token: str) -> None:
     """
     label.setProperty("tone", token)
     label.setStyleSheet(theme.fg(token))
+
+
+# --------------------------------------------------------------------------- #
+# taking a report off the screen: print, PDF, spreadsheet
+# --------------------------------------------------------------------------- #
+# A report nobody can get out of the window is half a report - it has to reach
+# an auditor, a bank or an email. Each screen describes itself as a Report and
+# the three things below (preview, print, export) work off that description
+# alone, so a new report gets all of them by writing one method.
+@dataclass
+class ReportSection:
+    """One table in a report, with the columns that hold money."""
+
+    heading: str
+    frame: pd.DataFrame
+    numeric: tuple[str, ...] = ()
+
+
+@dataclass
+class Report:
+    """A whole report, as it would be handed to someone."""
+
+    title: str
+    period: str                       # "as at 31/03/2027", "01/04 to 31/03"
+    sections: list[ReportSection]
+    notes: list[str] = field(default_factory=list)
+
+    def filename(self, suffix: str) -> str:
+        stem = re.sub(r"[^a-z0-9]+", "-", self.title.lower()).strip("-")
+        return f"{stem}-{date.today():%Y%m%d}{suffix}"
+
+
+def period_caption(bar: "PeriodBar") -> str:
+    """How a report's period reads on paper."""
+    start, end = bar.range()
+    if start is None:
+        return f"as at {end:%d/%m/%Y}"
+    return f"{start:%d/%m/%Y} to {end:%d/%m/%Y}"
+
+
+def _for_display(section: ReportSection) -> pd.DataFrame:
+    """The section with its money columns written the way the screen shows
+    them - grouped thousands, two decimals, and blank rather than 0.00."""
+    frame = section.frame.copy()
+    for column in section.numeric:
+        if column not in frame.columns:
+            continue
+        shown = []
+        for value in frame[column]:
+            if pd.isna(value):
+                shown.append("")
+                continue
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                # Already presentation text, not a number: the ledger's
+                # Balance column carries Tally's "88,000.00 Dr". It belongs in
+                # `numeric` so it is right-aligned with the other figures, and
+                # it is passed through exactly as written.
+                shown.append(str(value))
+                continue
+            shown.append("" if abs(number) < 0.005 else f"{number:,.2f}")
+        frame[column] = shown
+    return frame
+
+
+def report_html(report: Report, company: str | None = None) -> str:
+    """The report as a printable page.
+
+    Figures are FORMATTED here, unlike the spreadsheet export which keeps them
+    as numbers: this is the copy somebody reads, and the other is the copy
+    somebody computes with.
+    """
+    who = company if company is not None else db.company_display_name()
+    # Qt's rich-text engine understands only a subset of CSS, and cell padding
+    # is not in it: styled with `td { padding }` alone the columns print
+    # touching each other, so "Capital Account" and "100,000.00" ran together.
+    # Spacing comes from the table's cellpadding ATTRIBUTE instead.
+    # Colours are stated outright for the same reason they are not taken from
+    # the scheme: this goes on white paper whatever the screen looks like, and
+    # a dark scheme's pale text would print nearly invisible.
+    parts = [
+        "<html><head><meta charset='utf-8'><style>",
+        "body { font-family: sans-serif; color: #000000; }",
+        "h1 { font-size: 15pt; margin: 0 0 2pt 0; color: #000000; }",
+        "h2 { font-size: 11pt; margin: 12pt 0 3pt 0; color: #000000; }",
+        ".who { font-size: 11pt; font-weight: bold; }",
+        ".period { margin-bottom: 8pt; }",
+        ".note { font-size: 9pt; margin-top: 8pt; }",
+        "</style></head><body>",
+        f"<div class='who'>{html.escape(who)}</div>",
+        f"<h1>{html.escape(report.title)}</h1>",
+        f"<div class='period'>{html.escape(report.period)}</div>",
+    ]
+    for section in report.sections:
+        if section.heading:
+            parts.append(f"<h2>{html.escape(section.heading)}</h2>")
+        frame = _for_display(section)
+        if frame.empty:
+            parts.append("<p><i>Nothing to show.</i></p>")
+            continue
+        # Built by hand rather than with to_html, which gives no hook for
+        # per-column alignment - and a column of figures that is not
+        # right-aligned is the difference between a report and a dump.
+        right = {column for column in section.numeric
+                 if column in frame.columns}
+
+        def cell(tag: str, column, value) -> str:
+            side = "right" if column in right else "left"
+            shown = "" if pd.isna(value) else html.escape(str(value))
+            return f"<{tag} style='text-align: {side}'>{shown}</{tag}>"
+
+        head = "".join(cell("th", c, c) for c in frame.columns)
+        body = "".join(
+            "<tr>" + "".join(cell("td", c, v)
+                             for c, v in zip(frame.columns, row)) + "</tr>"
+            for row in frame.itertuples(index=False))
+        parts.append(
+            "<table width='100%' cellpadding='4' cellspacing='0' border='1'"
+            f" style='border-collapse: collapse'><tr>{head}</tr>"
+            f"{body}</table>")
+    for note in report.notes:
+        if note:
+            parts.append(f"<div class='note'>{html.escape(note)}</div>")
+    parts.append("</body></html>")
+    return "\n".join(parts)
+
+
+def _document(report: Report) -> QtGui.QTextDocument:
+    doc = QtGui.QTextDocument()
+    doc.setHtml(report_html(report))
+    return doc
+
+
+def preview_report(report: Report, parent=None) -> None:
+    """Show the report as it will print, with printing available from there.
+
+    A preview rather than a bare print dialog: these are wide tables, and
+    whether one fits the page is the first thing anybody wants to know.
+    """
+    from PySide6 import QtPrintSupport
+
+    printer = QtPrintSupport.QPrinter(
+        QtPrintSupport.QPrinter.PrinterMode.HighResolution)
+    printer.setDocName(report.filename(""))
+    dialog = QtPrintSupport.QPrintPreviewDialog(printer, parent)
+    dialog.setWindowTitle(f"{report.title} — print preview")
+    dialog.paintRequested.connect(lambda target: _document(report).print_(target))
+    dialog.resize(900, 700)
+    dialog.exec()
+    dialog.deleteLater()
+
+
+def export_report(report: Report, parent=None,
+                  path: str | None = None) -> Path | None:
+    """Write the report to a spreadsheet or a CSV. Returns the file written.
+
+    Figures stay NUMBERS here rather than formatted text, so the file can be
+    summed and pivoted on arrival - a column of "1,234.00" strings is a
+    spreadsheet you have to repair before you can use it.
+    """
+    if path is None:
+        suggested = str(Path.home() / report.filename(".xlsx"))
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            parent, f"Export {report.title}", suggested,
+            "Excel workbook (*.xlsx);;CSV file (*.csv)")
+        if not path:
+            return None
+    target = Path(path)
+    if target.suffix.lower() == ".csv":
+        _export_csv(report, target)
+    else:
+        _export_excel(report, target)
+    return target
+
+
+def _export_csv(report: Report, target: Path) -> None:
+    """One flat file: the sections stacked, each under its own heading.
+
+    A CSV holds one table, so a report with four of them has to be laid out
+    rather than simply dumped - blank lines and headings are what let a reader
+    tell where the trading account ends and the indirect one begins.
+    """
+    lines = [[report.title], [db.company_display_name()], [report.period], []]
+    with open(target, "w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.writer(handle)
+        writer.writerows(lines)
+        for section in report.sections:
+            if section.heading:
+                writer.writerow([section.heading])
+            if section.frame.empty:
+                writer.writerow(["(nothing to show)"])
+            else:
+                writer.writerow(list(section.frame.columns))
+                for row in section.frame.itertuples(index=False):
+                    writer.writerow(["" if pd.isna(v) else v for v in row])
+            writer.writerow([])
+        for note in report.notes:
+            if note:
+                writer.writerow([note])
+
+
+def _export_excel(report: Report, target: Path) -> None:
+    """A sheet per section, each headed with who, what and when.
+
+    Sheet names are trimmed to Excel's 31 characters and stripped of the
+    characters it refuses, because a long section heading would otherwise make
+    the whole write fail at the last step.
+    """
+    with pd.ExcelWriter(target, engine="openpyxl") as writer:
+        for index, section in enumerate(report.sections):
+            name = re.sub(r"[\[\]:*?/\\]", " ",
+                          section.heading or report.title)[:31].strip()
+            name = name or f"Sheet{index + 1}"
+            frame = section.frame
+            frame.to_excel(writer, sheet_name=name, index=False, startrow=4)
+            sheet = writer.sheets[name]
+            sheet["A1"] = db.company_display_name()
+            sheet["A2"] = report.title
+            sheet["A3"] = report.period
+            if section.heading:
+                sheet["A4"] = section.heading
+            # Enough width to read a ledger name or a formatted figure.
+            for column, header in enumerate(frame.columns, start=1):
+                width = max(len(str(header)) + 2,
+                            *(len(str(v)) + 2 for v in frame[header])) \
+                    if len(frame) else len(str(header)) + 2
+                sheet.column_dimensions[
+                    sheet.cell(row=5, column=column).column_letter].width = \
+                    min(40, max(10, width))
+            if report.notes:
+                start = 6 + len(frame)
+                for offset, note in enumerate(report.notes):
+                    sheet.cell(row=start + offset, column=1, value=note)
+
+
+class ReportActions(QtWidgets.QWidget):
+    """The Print and Export buttons, for a screen that can describe itself.
+
+    Takes a callable rather than a Report: the report is whatever is on screen
+    at the moment the button is pressed, and capturing it at build time would
+    export the empty one the screen started with.
+    """
+
+    def __init__(self, source, parent=None):
+        super().__init__(parent)
+        self.source = source
+        row = QtWidgets.QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addStretch(1)
+        self.print_button = QtWidgets.QPushButton("Print…  (Ctrl+P)")
+        self.print_button.setToolTip("Preview and print, or save as PDF from "
+                                     "the printer list")
+        self.print_button.clicked.connect(self.print_report)
+        self.export_button = QtWidgets.QPushButton("Export…  (Ctrl+E)")
+        self.export_button.setToolTip("Write this report to a spreadsheet "
+                                      "or a CSV file")
+        self.export_button.clicked.connect(self.export)
+        row.addWidget(self.print_button)
+        row.addWidget(self.export_button)
+
+    def print_report(self) -> None:
+        preview_report(self.source(), self)
+
+    def export(self) -> None:
+        report = self.source()
+        try:
+            written = export_report(report, self)
+        except Exception as exc:                      # noqa: BLE001
+            QtWidgets.QMessageBox.warning(
+                self, "Could not export",
+                f"Nothing was written:\n\n{exc}\n\nIf the file is open in "
+                f"Excel, close it and try again.")
+            return
+        if written is None:
+            return
+        window = self.window()
+        if isinstance(window, QtWidgets.QMainWindow):
+            window.statusBar().showMessage(f"Exported to {written}", 8000)
 
 
 def totals_bar(*pairs: tuple[str, str]) -> QtWidgets.QWidget:
@@ -1017,7 +1300,9 @@ class DayBookScreen(QtWidgets.QWidget):
         layout.addWidget(self.table, 1)
         layout.addWidget(QtWidgets.QLabel(
             "Double-click a voucher to alter it."))
+        layout.addWidget(ReportActions(self.report))
         self._frame = pd.DataFrame()
+        self._shown = pd.DataFrame()
 
     def refresh(self) -> None:
         start, end = self.period.range()
@@ -1030,7 +1315,19 @@ class DayBookScreen(QtWidgets.QWidget):
         shown = self._frame.drop(columns=["voucher_id"]) if not frame.empty \
             else pd.DataFrame(columns=["Date", "Particulars", "Vch Type",
                                        "Vch No", "Debit", "Credit"])
+        # Kept for print and export: what is on SCREEN, without the voucher
+        # id the table hides and no reader of a report wants to see.
+        self._shown = shown
         self.table.load(shown, numeric=("Debit", "Credit"))
+
+    def report(self) -> Report:
+        kind = self.type_filter.currentText()
+        return Report(
+            title="Day Book",
+            period=period_caption(self.period)
+            + ("" if kind == "All" else f"  ·  {kind} vouchers only"),
+            sections=[ReportSection("", self._shown, ("Debit", "Credit"))],
+            notes=[self.count.text()])
 
     def _open(self, index) -> None:
         if 0 <= index.row() < len(self._frame):
@@ -1067,7 +1364,10 @@ class LedgerScreen(QtWidgets.QWidget):
         self.footer_slot = QtWidgets.QVBoxLayout()
         self.footer_slot.setContentsMargins(0, 0, 0, 0)
         layout.addLayout(self.footer_slot)
+        layout.addWidget(ReportActions(self.report))
         self._frame = pd.DataFrame()
+        self._shown = pd.DataFrame()
+        self._summary = ""
 
     def reload_ledgers(self) -> None:
         current = self.ledger_box.currentText()
@@ -1096,6 +1396,16 @@ class LedgerScreen(QtWidgets.QWidget):
         shown = self._frame.drop(columns=["voucher_id"]) if not self._frame.empty \
             else pd.DataFrame(columns=["Date", "Particulars", "Vch Type",
                                        "Vch No", "Debit", "Credit", "Balance"])
+        self._shown = shown
+        # The screen says this in the caption as HTML and in the totals bar;
+        # on paper it has to be one plain line, and it is the whole point of a
+        # ledger statement - opening, what moved, closing.
+        self._summary = (
+            f"{statement['ledger']}, under {statement['group']}"
+            f"  ·  Opening {acc.fmt_side(statement['opening'])}"
+            f"  ·  Debit {statement['debit_total']:,.2f}"
+            f"  ·  Credit {statement['credit_total']:,.2f}"
+            f"  ·  Closing {acc.fmt_side(statement['closing'])}")
         self.table.load(shown, numeric=("Debit", "Credit"))
 
         while self.footer_slot.count():
@@ -1106,6 +1416,15 @@ class LedgerScreen(QtWidgets.QWidget):
             ("Debit", f"{statement['debit_total']:,.2f}"),
             ("Credit", f"{statement['credit_total']:,.2f}"),
             ("Closing", acc.fmt_side(statement["closing"]))))
+
+    def report(self) -> Report:
+        name = self.ledger_box.currentText() or "Ledger"
+        return Report(
+            title=f"Ledger - {name}",
+            period=period_caption(self.period),
+            sections=[ReportSection("", self._shown,
+                                    ("Debit", "Credit", "Balance"))],
+            notes=[self._summary])
 
     def _open(self, index) -> None:
         if 0 <= index.row() < len(self._frame):
@@ -1128,20 +1447,32 @@ class TrialBalanceScreen(QtWidgets.QWidget):
         layout.addWidget(self.status)
         self.table = FrameTable()
         layout.addWidget(self.table, 1)
+        layout.addWidget(ReportActions(self.report))
+        self._shown = pd.DataFrame()
+
+    def report(self) -> Report:
+        return Report(
+            title="Trial Balance",
+            period=period_caption(self.period)
+            + ("  ·  summarised by group" if self.by_group.isChecked() else ""),
+            sections=[ReportSection("", self._shown, ("Debit", "Credit"))],
+            notes=[self.status.text()])
 
     def refresh(self) -> None:
         _, as_at = self.period.range()
         trial = acc.trial_balance(as_at, by_group=self.by_group.isChecked())
         rows = trial["rows"]
         if rows.empty:
-            self.table.load(pd.DataFrame(columns=["Particulars", "Debit", "Credit"]),
-                            numeric=("Debit", "Credit"))
+            self._shown = pd.DataFrame(
+                columns=["Particulars", "Debit", "Credit"])
+            self.table.load(self._shown, numeric=("Debit", "Credit"))
         else:
             total = {"Particulars": "Total", "Debit": trial["debit"],
                      "Credit": trial["credit"]}
             if "Under" in rows.columns:
                 total["Under"] = ""
             shown = pd.concat([rows, pd.DataFrame([total])], ignore_index=True)
+            self._shown = shown
             self.table.load(shown, numeric=("Debit", "Credit"), bold_last=True)
 
         if abs(trial["difference"]) <= acc.EPS:
@@ -1189,6 +1520,31 @@ class ProfitLossScreen(QtWidgets.QWidget):
         layout.addLayout(indirect, 1)
         self.net_label = flowing(QtWidgets.QLabel())
         layout.addWidget(self.net_label)
+        layout.addWidget(ReportActions(self.report))
+        self._parts: dict[str, pd.DataFrame] = {}
+        self._lines: list[str] = []
+
+    def report(self) -> Report:
+        """Four tables, in the order the statement is read.
+
+        The side labels carry the totals and the profit figures, which are the
+        numbers anybody actually wants - so they go on as notes rather than
+        being left behind on the screen.
+        """
+        blank = pd.DataFrame(columns=["Particulars", "Under", "Amount"])
+        order = (("Trading account - purchases and direct expenses",
+                  "trading_expense"),
+                 ("Trading account - sales and direct incomes",
+                  "trading_income"),
+                 ("Indirect expenses", "indirect_expense"),
+                 ("Indirect incomes", "indirect_income"))
+        return Report(
+            title="Profit & Loss",
+            period=period_caption(self.period),
+            sections=[ReportSection(label,
+                                    self._parts.get(key, blank), ("Amount",))
+                      for label, key in order],
+            notes=self._lines)
 
     def refresh(self) -> None:
         start, end = self.period.range()
@@ -1225,6 +1581,18 @@ class ProfitLossScreen(QtWidgets.QWidget):
         self.net_label.setText(
             f"<b>{'Net profit' if net >= 0 else 'Net loss'}: {money(abs(net))}</b>")
 
+        self._parts = {key: report[key] for key in
+                       ("trading_expense", "trading_income",
+                        "indirect_expense", "indirect_income")}
+        self._lines = [
+            f"Purchases and direct expenses {money(totals['trading_expense'])}"
+            f"  ·  Sales and direct incomes {money(totals['trading_income'])}",
+            f"{'Gross profit' if gross >= 0 else 'Gross loss'}"
+            f" {money(abs(gross))}",
+            f"Indirect expenses {money(totals['indirect_expense'])}"
+            f"  ·  Indirect incomes {money(totals['indirect_income'])}",
+            f"{'Net profit' if net >= 0 else 'Net loss'} {money(abs(net))}"]
+
 
 class BalanceSheetScreen(QtWidgets.QWidget):
     def __init__(self, parent=None):
@@ -1260,6 +1628,23 @@ class BalanceSheetScreen(QtWidgets.QWidget):
             "books to this date. Nominal ledgers are closed into it.")
         note.setWordWrap(True)
         layout.addWidget(muted(note))
+        layout.addWidget(ReportActions(self.report))
+        self._note = note.text()
+        self._sides: dict[str, pd.DataFrame] = {}
+        self._lines: list[str] = []
+
+    def report(self) -> Report:
+        blank = pd.DataFrame(columns=["Particulars", "Amount"])
+        return Report(
+            title="Balance Sheet",
+            period=period_caption(self.period),
+            sections=[
+                ReportSection("Liabilities",
+                              self._sides.get("liabilities", blank),
+                              ("Amount",)),
+                ReportSection("Assets", self._sides.get("assets", blank),
+                              ("Amount",))],
+            notes=self._lines + [self._note])
 
     def refresh(self) -> None:
         _, as_at = self.period.range()
@@ -1270,6 +1655,11 @@ class BalanceSheetScreen(QtWidgets.QWidget):
         self.asset_label.setText(f"<b>Assets</b> &nbsp; {money(totals['assets'])}")
         self.liabilities.load(sheet["liabilities"], numeric=("Amount",))
         self.assets.load(sheet["assets"], numeric=("Amount",))
+        self._sides = {"liabilities": sheet["liabilities"],
+                       "assets": sheet["assets"]}
+        self._lines = [
+            f"Liabilities {money(totals['liabilities'])}"
+            f"  ·  Assets {money(totals['assets'])}"]
         if abs(totals["difference"]) <= acc.EPS:
             self.status.setText("Both sides agree.")
             tone(self.status, "good")
@@ -1856,6 +2246,16 @@ class MainWindow(QtWidgets.QMainWindow):
         refresh.triggered.connect(self.refresh_all)
         self.addAction(refresh)
 
+        report_menu = bar.addMenu("&Report")
+        print_action = QtGui.QAction("Print…", self)
+        print_action.setShortcut(QtGui.QKeySequence("Ctrl+P"))
+        print_action.triggered.connect(self.print_current)
+        report_menu.addAction(print_action)
+        export_action = QtGui.QAction("Export…", self)
+        export_action.setShortcut(QtGui.QKeySequence("Ctrl+E"))
+        export_action.triggered.connect(self.export_current)
+        report_menu.addAction(export_action)
+
         company_menu = bar.addMenu("&Company")
         details = QtGui.QAction("Company details", self)
         details.triggered.connect(
@@ -2115,6 +2515,45 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No)
         return answer == QtWidgets.QMessageBox.Yes
+
+    # --- print and export the report on screen ---------------------------- #
+    def current_report(self) -> Report | None:
+        """What the screen in front of you would print, if it is a report.
+
+        Voucher Entry, Masters and Company are not reports - they are input -
+        so Ctrl+P on them says so rather than printing something arbitrary.
+        """
+        screen = self.screens[self.stack.currentIndex()][1]
+        source = getattr(screen, "report", None)
+        return source() if callable(source) else None
+
+    def _not_a_report(self) -> None:
+        self.statusBar().showMessage(
+            "This screen is not a report - open Day Book, Ledger, Trial "
+            "Balance, Profit & Loss or Balance Sheet first.", 6000)
+
+    def print_current(self) -> None:
+        report = self.current_report()
+        if report is None:
+            self._not_a_report()
+            return
+        preview_report(report, self)
+
+    def export_current(self) -> None:
+        report = self.current_report()
+        if report is None:
+            self._not_a_report()
+            return
+        try:
+            written = export_report(report, self)
+        except Exception as exc:                      # noqa: BLE001
+            QtWidgets.QMessageBox.warning(
+                self, "Could not export",
+                f"Nothing was written:\n\n{exc}\n\nIf the file is open in "
+                f"Excel, close it and try again.")
+            return
+        if written is not None:
+            self.statusBar().showMessage(f"Exported to {written}", 8000)
 
     # --- backups ---------------------------------------------------------- #
     def backup_on_open(self) -> None:

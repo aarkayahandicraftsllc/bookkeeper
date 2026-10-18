@@ -843,6 +843,83 @@ check("the trial balance is labelled the same way as the balance sheet",
        if lbl.parent() is window.trial.period],
       ["Year", "As at"])
 
+print("\n22) Printing and exporting the reports")
+db.use_company(TMP)
+window.refresh_all()
+import html  # noqa: E402  (only this section needs these)
+import openpyxl  # noqa: E402
+
+REPORTS = {1: "Day Book", 2: "Ledger", 3: "Trial Balance",
+           4: "Profit & Loss", 5: "Balance Sheet"}
+for index, title in REPORTS.items():
+    window.show_screen(index)
+    settle()
+    report = window.current_report()
+    check(f"{title}: the screen describes itself as a report",
+          report is not None and report.title.startswith(title.split(" & ")[0]),
+          True)
+    check(f"{title}: it says which period it covers",
+          bool(report.period), True)
+    check(f"{title}: it has at least one table",
+          len(report.sections) >= 1, True)
+
+    # Printing cannot be clicked through here, but the page it would print is
+    # just a document - so that is checked instead of the printer.
+    page = desktop.report_html(report)
+    # Escaped, because "Profit & Loss" is written "Profit &amp; Loss" on a
+    # page - the title is text being put into HTML, not markup.
+    check(f"{title}: the printable page names the report",
+          html.escape(report.title) in page, True)
+    check(f"{title}: and the company whose books these are",
+          db.company_display_name() in page, True)
+
+    for suffix in (".csv", ".xlsx"):
+        out = desktop.export_report(
+            report, path=str(db.DATA_DIR / report.filename(suffix)))
+        check(f"{title}: exported{suffix}",
+              out.exists() and out.stat().st_size > 0, True)
+    csv_text = (db.DATA_DIR / report.filename(".csv")).read_text(
+        encoding="utf-8-sig")
+    check(f"{title}: the CSV leads with the report, company and period",
+          csv_text.splitlines()[:3],
+          [report.title, db.company_display_name(), report.period])
+    book = openpyxl.load_workbook(db.DATA_DIR / report.filename(".xlsx"))
+    check(f"{title}: the workbook has a sheet per table",
+          len(book.sheetnames), len(report.sections))
+    check(f"{title}: each sheet is headed with the company",
+          book[book.sheetnames[0]]["A1"].value, db.company_display_name())
+    book.close()
+
+# Figures stay NUMBERS in a spreadsheet so they can be summed on arrival; a
+# column of "1,234.00" strings is a file you have to repair before using.
+window.show_screen(3)
+settle()
+trial = window.current_report()
+desktop.export_report(trial, path=str(db.DATA_DIR / "numbers.xlsx"))
+book = openpyxl.load_workbook(db.DATA_DIR / "numbers.xlsx")
+sheet = book[book.sheetnames[0]]
+columns = [c.value for c in sheet[5]]
+amounts = [sheet.cell(row=r, column=columns.index("Debit") + 1).value
+           for r in range(6, 6 + len(trial.sections[0].frame))]
+check("exported amounts are numbers, not formatted text",
+      all(v is None or isinstance(v, (int, float)) for v in amounts), True)
+book.close()
+# ...while the printed page IS formatted, being the copy somebody reads.
+check("the printed page groups the thousands",
+      "," in desktop.report_html(trial), True)
+
+# The input screens are not reports, and must say so rather than printing
+# something arbitrary.
+for index in (0, 6, 7):
+    window.show_screen(index)
+    settle()
+    check(f"screen {index} is not offered as a report",
+          window.current_report(), None)
+window.print_current()          # must not raise, and must not print
+window.export_current()
+check("asking anyway leaves a message instead of a document",
+      "not a report" in window.statusBar().currentMessage(), True)
+
 # The real data folder must be untouched by any of this.
 check("the suite wrote only into its sandbox",
       str(db.DATA_DIR).startswith(str(Path(tempfile.gettempdir()))), True)

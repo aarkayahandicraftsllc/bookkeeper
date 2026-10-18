@@ -32,6 +32,9 @@ Tally for data entry. The desktop app is for entry; use either for reports.
 | `F11` | Refresh every report |
 | `Esc` | Back to voucher entry |
 | `Ctrl+Shift+1` … `Ctrl+Shift+5` | Colour scheme |
+| `Ctrl+P` | Print the report on screen |
+| `Ctrl+E` | Export it to a spreadsheet or CSV |
+| `Ctrl+B` | Back up these books |
 | `Ctrl+=` / `Ctrl+-` | Text bigger / smaller |
 
 ## Text size
@@ -368,6 +371,46 @@ the boundaries by hand: April and January years, the first and last day of a
 year, a leap day, an unbroken run of years with no gaps or repeats, and a
 start month that is garbage falling back to April rather than stopping the
 reports from opening.
+
+## Printing and exporting
+
+Every report screen carries **Print…** (`Ctrl+P`) and **Export…** (`Ctrl+E`),
+also under the **Report** menu. A report nobody can get out of the window is
+half a report — it has to reach an auditor, a bank, or an email.
+
+**Print** opens a **preview** rather than going straight to a print dialog:
+these are wide tables, and whether one fits the page is the first thing anybody
+wants to know. Saving as PDF is the *Microsoft Print to PDF* entry in the
+printer list, so there is no separate PDF command to keep working.
+
+**Export** writes an **Excel workbook** (a sheet per table, each headed with the
+company, the report and the period) or a **CSV** if you name the file `.csv`.
+Both are offered in the save dialog.
+
+Two deliberate differences between the two outputs:
+
+* **The printed page is formatted; the spreadsheet keeps numbers.** Figures
+  print as `1,234.00`, grouped and right-aligned, because that copy is read by
+  a person. The spreadsheet gets the raw number, because that copy is summed
+  and pivoted — a column of `"1,234.00"` *strings* is a file you have to repair
+  before you can use it.
+* **A CSV holds one table, so a report with four of them is laid out, not
+  dumped.** Blank lines and headings are what let a reader tell where the
+  trading account ends and the indirect one begins. The Streamlit download
+  writes the same shape.
+
+A screen describes itself by returning a `Report` — a title, a period, a list
+of `ReportSection` tables, and the notes that carry the totals. Preview, print,
+Excel and CSV all work off that description alone, so a new report gets all
+four by writing one method. The notes matter more than they look: the gross and
+net profit, the closing balance, the opening-balance difference all live in
+screen labels rather than in any table, and a printed report without them would
+be missing the figures somebody actually wanted.
+
+`Ctrl+P` on Voucher Entry, Masters or Company says so in the status bar rather
+than printing something arbitrary — those screens are input, not reports.
+
+Streamlit has a **⬇️ CSV** download on each of its five reports.
 
 ## The rules it enforces, and the ones it only advises
 
