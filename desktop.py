@@ -396,6 +396,55 @@ def preview_report(report: Report, parent=None) -> None:
     dialog.deleteLater()
 
 
+def downloads_dir() -> Path:
+    """Where a browser would put a file - which is where people look for one.
+
+    Asked of the platform rather than assumed, because the folder is localised
+    and can be moved; the guess and then the home folder are only there so a
+    machine that reports nothing still gets somewhere writable.
+    """
+    location = QtCore.QStandardPaths.writableLocation(
+        QtCore.QStandardPaths.StandardLocation.DownloadLocation)
+    if location and Path(location).is_dir():
+        return Path(location)
+    guess = Path.home() / "Downloads"
+    return guess if guess.is_dir() else Path.home()
+
+
+def export_and_open(report: Report, parent=None) -> Path | None:
+    """Write the report, then open it in whatever handles the file.
+
+    Opening is most of the point: an export you then have to go and find is a
+    job in itself, and the file is offered to Downloads precisely because that
+    is where you would look for it.
+
+    Separate from ``export_report`` so that writing a file and launching an
+    application stay apart - the tests, and anything scripted, want the first
+    without the second.
+    """
+    try:
+        written = export_report(report, parent)
+    except Exception as exc:                          # noqa: BLE001
+        QtWidgets.QMessageBox.warning(
+            parent, "Could not export",
+            f"Nothing was written:\n\n{exc}\n\nIf the file is already open in "
+            f"Excel, close it and try again.")
+        return None
+    if written is None:
+        return None
+
+    opened = QtGui.QDesktopServices.openUrl(
+        QtCore.QUrl.fromLocalFile(str(written)))
+    window = parent.window() if parent is not None else None
+    if isinstance(window, QtWidgets.QMainWindow):
+        # Said either way: a file written but not opened still has to be
+        # findable, so the path goes up even when launching failed.
+        window.statusBar().showMessage(
+            f"Exported to {written}" if opened else
+            f"Exported to {written} — could not open it automatically", 10000)
+    return written
+
+
 def export_report(report: Report, parent=None,
                   path: str | None = None) -> Path | None:
     """Write the report to a spreadsheet or a CSV. Returns the file written.
@@ -405,7 +454,7 @@ def export_report(report: Report, parent=None,
     spreadsheet you have to repair before you can use it.
     """
     if path is None:
-        suggested = str(Path.home() / report.filename(".xlsx"))
+        suggested = str(downloads_dir() / report.filename(".xlsx"))
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             parent, f"Export {report.title}", suggested,
             "Excel workbook (*.xlsx);;CSV file (*.csv)")
@@ -508,20 +557,7 @@ class ReportActions(QtWidgets.QWidget):
         preview_report(self.source(), self)
 
     def export(self) -> None:
-        report = self.source()
-        try:
-            written = export_report(report, self)
-        except Exception as exc:                      # noqa: BLE001
-            QtWidgets.QMessageBox.warning(
-                self, "Could not export",
-                f"Nothing was written:\n\n{exc}\n\nIf the file is open in "
-                f"Excel, close it and try again.")
-            return
-        if written is None:
-            return
-        window = self.window()
-        if isinstance(window, QtWidgets.QMainWindow):
-            window.statusBar().showMessage(f"Exported to {written}", 8000)
+        export_and_open(self.source(), self)
 
 
 def totals_bar(*pairs: tuple[str, str]) -> QtWidgets.QWidget:
@@ -2544,16 +2580,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if report is None:
             self._not_a_report()
             return
-        try:
-            written = export_report(report, self)
-        except Exception as exc:                      # noqa: BLE001
-            QtWidgets.QMessageBox.warning(
-                self, "Could not export",
-                f"Nothing was written:\n\n{exc}\n\nIf the file is open in "
-                f"Excel, close it and try again.")
-            return
-        if written is not None:
-            self.statusBar().showMessage(f"Exported to {written}", 8000)
+        export_and_open(report, self)
 
     # --- backups ---------------------------------------------------------- #
     def backup_on_open(self) -> None:

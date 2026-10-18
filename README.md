@@ -385,7 +385,17 @@ printer list, so there is no separate PDF command to keep working.
 
 **Export** writes an **Excel workbook** (a sheet per table, each headed with the
 company, the report and the period) or a **CSV** if you name the file `.csv`.
-Both are offered in the save dialog.
+Both are offered in the save dialog, which **opens on your Downloads folder**
+with a name already filled in — and the file is **opened** once it is written.
+Opening it is most of the point: an export you then have to go and find is a
+job in itself, and Downloads is where you would look.
+
+The folder is asked of the platform rather than assumed, since it is localised
+and can be moved. Writing the file and launching an application are kept apart
+(`export_report` and `export_and_open`), because anything scripted wants the
+first without the second. If the file cannot be opened — no application
+associated with it — the path is still reported, since a file written but not
+opened has to remain findable.
 
 Two deliberate differences between the two outputs:
 

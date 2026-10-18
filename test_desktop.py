@@ -920,6 +920,65 @@ window.export_current()
 check("asking anyway leaves a message instead of a document",
       "not a report" in window.statusBar().currentMessage(), True)
 
+# Export offers the Downloads folder and opens what it wrote. Both the save
+# dialog and the launch are stubbed - one would block the suite waiting for a
+# click, the other would start Excel.
+check("the Downloads folder is a real directory",
+      desktop.downloads_dir().is_dir(), True)
+check("and is the one the platform reports",
+      desktop.downloads_dir().name.lower() in ("downloads", "223137552.aeroad"),
+      True)
+
+_offered = []
+_launched = []
+_real_dialog = QtWidgets.QFileDialog.getSaveFileName
+_real_open = QtGui.QDesktopServices.openUrl
+target = db.DATA_DIR / "opened-after-export.xlsx"
+
+
+def _stub_dialog(parent=None, caption="", directory="", filter=""):
+    _offered.append(directory)
+    return str(target), filter
+
+
+QtWidgets.QFileDialog.getSaveFileName = staticmethod(_stub_dialog)
+QtGui.QDesktopServices.openUrl = staticmethod(
+    lambda url: _launched.append(url.toLocalFile()) or True)
+
+window.show_screen(3)
+settle()
+written = desktop.export_and_open(window.current_report(), window)
+check("export writes the file", written == target and target.exists(), True)
+check("the save dialog starts in the Downloads folder",
+      str(desktop.downloads_dir()) in _offered[0], True)
+check("and it suggests a name, not just a folder",
+      _offered[0].lower().endswith(".xlsx"), True)
+check("the file is opened afterwards",
+      # Compared as paths: a QUrl gives forward slashes where Windows gives
+      # backslashes, and the two strings differ for the same file.
+      [Path(p) for p in _launched], [target])
+check("the status bar says where it went",
+      str(target) in window.statusBar().currentMessage(), True)
+
+# A file that cannot be opened must still be reported, not silently dropped.
+_launched.clear()
+QtGui.QDesktopServices.openUrl = staticmethod(lambda url: False)
+desktop.export_and_open(window.current_report(), window)
+check("a file that will not open still reports its path",
+      str(target) in window.statusBar().currentMessage()
+      and "could not open" in window.statusBar().currentMessage(), True)
+
+# Cancelling the dialog writes nothing and opens nothing.
+QtWidgets.QFileDialog.getSaveFileName = staticmethod(
+    lambda *a, **k: ("", ""))
+_launched.clear()
+check("cancelling the save dialog writes nothing",
+      desktop.export_and_open(window.current_report(), window), None)
+check("and opens nothing", _launched, [])
+
+QtWidgets.QFileDialog.getSaveFileName = _real_dialog
+QtGui.QDesktopServices.openUrl = _real_open
+
 # The real data folder must be untouched by any of this.
 check("the suite wrote only into its sandbox",
       str(db.DATA_DIR).startswith(str(Path(tempfile.gettempdir()))), True)
