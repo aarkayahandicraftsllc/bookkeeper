@@ -8,7 +8,7 @@ import os
 import sys
 import shutil
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -483,6 +483,75 @@ check("and no file was left behind",
 check("peeking reads the name without opening it",
       db.peek_company(first)["company_name"], "First Company")
 db.use_company(pinned)
+
+print("\nFinancial years")
+
+# The arithmetic, worked by hand. An April year running 2026-27 covers
+# 01/04/2026 to 31/03/2027, and 31/03/2026 belongs to the year BEFORE it.
+db.set_setting("fy_start_month", "4")
+check("an April year opens on 1 April",
+      acc.fy_bounds(date(2026, 7, 15)), (date(2026, 4, 1), date(2027, 3, 31)))
+check("a date in March belongs to the year that opened last April",
+      acc.fy_bounds(date(2026, 3, 31)), (date(2025, 4, 1), date(2026, 3, 31)))
+check("the first day is in its own year",
+      acc.fy_bounds(date(2026, 4, 1)), (date(2026, 4, 1), date(2027, 3, 31)))
+check("and the last day too",
+      acc.fy_bounds(date(2027, 3, 31)), (date(2026, 4, 1), date(2027, 3, 31)))
+check("an April year is labelled across two calendar years",
+      acc.fy_label(date(2026, 4, 1)), "2026-2027")
+
+# Books that run the calendar year are a different shape, not a special case
+# of the same one: the year ends in December of its OWN year, and
+# "2026-2026" would be nonsense as a label.
+db.set_setting("fy_start_month", "1")
+check("a January year is the calendar year",
+      acc.fy_bounds(date(2026, 7, 15)), (date(2026, 1, 1), date(2026, 12, 31)))
+check("and is labelled with the one year", acc.fy_label(date(2026, 1, 1)),
+      "2026")
+
+# A leap day must not shift the year's boundaries.
+check("February 29 falls in the year containing it",
+      acc.fy_bounds(date(2028, 2, 29)), (date(2028, 1, 1), date(2028, 12, 31)))
+
+# Garbage in the setting must not stop the reports opening.
+db.set_setting("fy_start_month", "13")
+check("an impossible start month falls back to April",
+      acc.fy_start_month(), 4)
+db.set_setting("fy_start_month", "not a month")
+check("so does a start month that is not a number",
+      acc.fy_start_month(), 4)
+
+db.set_setting("fy_start_month", "4")
+years = acc.financial_years()
+labels = [y.label for y in years]
+# These books hold vouchers dated April 2026 and begin 01/04/2026, so the
+# 2026-2027 year is earned by the data; 2025-2026 is offered anyway, because
+# comparing with last year is routine.
+check("the year holding the vouchers is listed", "2026-2027" in labels, True)
+check("last year is offered even with nothing posted in it",
+      "2025-2026" in labels, True)
+check("the years are in order, earliest first", labels, sorted(labels))
+check("every year starts the day after the last one ends",
+      all(years[i + 1].start - years[i].end == timedelta(days=1)
+          for i in range(len(years) - 1)), True)
+check("no year is listed twice", len(labels), len(set(labels)))
+check("today is inside one of them",
+      any(y.contains(date.today()) for y in years), True)
+check("and that is the one reported as current",
+      acc.current_financial_year().contains(date.today()), True)
+
+# A voucher dated years back must pull its year into the list, or there would
+# be no way to report on it.
+db.save_voucher(
+    voucher_type="Journal", voucher_date=date(2023, 5, 10),
+    narration="An old entry",
+    lines=[{"ledger_id": db.ledger_id("Cash"), "debit": 10.0, "credit": 0.0},
+           {"ledger_id": db.ledger_id("Sales"), "debit": 0.0, "credit": 10.0}])
+labels = [y.label for y in acc.financial_years()]
+check("an old voucher brings its year into the list",
+      "2023-2024" in labels, True)
+check("and the years between it and now are unbroken",
+      labels, ["2023-2024", "2024-2025", "2025-2026", "2026-2027"])
 
 print("\n" + ("ALL CHECKS PASSED" if not FAILURES else f"FAILURES: {FAILURES}"))
 raise SystemExit(1 if FAILURES else 0)

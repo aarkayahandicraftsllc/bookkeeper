@@ -726,53 +726,151 @@ class VoucherScreen(QtWidgets.QWidget):
 # report screens
 # --------------------------------------------------------------------------- #
 class PeriodBar(QtWidgets.QWidget):
-    """From/to dates with Tally-ish presets."""
+    """Which period a report covers: pick a financial year, or set dates.
+
+    The year dropdown is the quick path - "the Balance Sheet for 2025-2026" is
+    how the question is actually asked, and reaching it by typing two dates is
+    needless work. The dates stay, because a period that is not a whole year
+    (a quarter, a month, up to yesterday) still has to be reachable.
+
+    The two cannot be allowed to disagree: editing a date by hand moves the
+    dropdown to **Custom dates**, because leaving it reading "FY 2026-2027"
+    over a period that is no longer that year would be a lie about what you
+    are looking at.
+    """
 
     changed = QtCore.Signal()
+
+    SINCE = "Since books began"
+    CUSTOM = "Custom dates"
+    # Marks the since-books-began entry. The years carry a FinancialYear and
+    # Custom carries None, so the three are told apart by what they hold
+    # rather than by their position in a list that changes with the data.
+    ALL = "all"
 
     def __init__(self, with_from: bool = True, parent=None):
         super().__init__(parent)
         self.with_from = with_from
+        # Set while the bar updates its own dates, so that the handlers which
+        # watch for YOUR edits do not fire for ours - without it, choosing a
+        # year would immediately flip the dropdown to Custom.
+        self._quiet = False
         row = QtWidgets.QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
 
-        fy_start, fy_end = self._fy()
+        row.addWidget(QtWidgets.QLabel("Period"))
+        self.year_box = QtWidgets.QComboBox()
+        self.year_box.setToolTip(
+            "The financial year to report on. The years come from the books, "
+            "and the month one opens on is set on the Company screen.")
+        self.year_box.currentIndexChanged.connect(self._year_chosen)
+        row.addWidget(self.year_box)
+
         if with_from:
             row.addWidget(QtWidgets.QLabel("From"))
-            self.from_edit = QtWidgets.QDateEdit(to_qdate(fy_start))
+            self.from_edit = QtWidgets.QDateEdit()
             self.from_edit.setCalendarPopup(True)
             self.from_edit.setDisplayFormat("dd/MM/yyyy")
-            self.from_edit.dateChanged.connect(lambda *_: self.changed.emit())
+            self.from_edit.dateChanged.connect(self._date_typed)
             row.addWidget(self.from_edit)
 
         row.addWidget(QtWidgets.QLabel("To"))
         self.to_edit = QtWidgets.QDateEdit(to_qdate(date.today()))
         self.to_edit.setCalendarPopup(True)
         self.to_edit.setDisplayFormat("dd/MM/yyyy")
-        self.to_edit.dateChanged.connect(lambda *_: self.changed.emit())
+        self.to_edit.dateChanged.connect(self._date_typed)
         row.addWidget(self.to_edit)
 
-        if with_from:
-            self.since = QtWidgets.QCheckBox("Since books began")
-            self.since.toggled.connect(self._toggle_since)
-            row.addWidget(self.since)
         row.addStretch(1)
 
-    @staticmethod
-    def _fy() -> tuple[date, date]:
-        month = int(db.get_setting("fy_start_month", "4"))
-        today = date.today()
-        year = today.year if today.month >= month else today.year - 1
-        return date(year, month, 1), today
+        self.reload_years()
 
-    def _toggle_since(self, on: bool) -> None:
-        self.from_edit.setEnabled(not on)
+    # --- the year list ---------------------------------------------------- #
+    def reload_years(self) -> None:
+        """(Re)fill the dropdown from the books, keeping the year selected.
+
+        Called again whenever the books change under it - another company
+        opened, or the financial-year start month edited on the Company
+        screen - because both change what the years ARE. Matching on the
+        label rather than the index means a year that still exists stays
+        selected even though the list around it has moved.
+        """
+        wanted = self.year_box.currentText()
+        years = acc.financial_years()
+
+        self._quiet = True
+        self.year_box.clear()
+        # Since-books-began lives in this dropdown rather than beside it as a
+        # tickbox: it is one of the periods you can choose, and a row holding
+        # both was 1468px wide at the largest text size - wider than the
+        # 1400px ceiling the whole app has to fit inside.
+        if self.with_from:
+            self.year_box.addItem(self.SINCE, self.ALL)
+        for year in years:
+            self.year_box.addItem(f"FY {year.label}", year)
+        self.year_box.addItem(self.CUSTOM, None)
+
+        index = self.year_box.findText(wanted) if wanted else -1
+        if index < 0:
+            current = acc.current_financial_year()
+            index = max(0, self.year_box.findText(f"FY {current.label}"))
+        self.year_box.setCurrentIndex(index)
+        self._quiet = False
+        self._apply(self.year_box.currentData())
+
+    def _year_chosen(self, _index: int) -> None:
+        if self._quiet:
+            return
+        self._apply(self.year_box.currentData())
+
+    def _apply(self, chosen) -> None:
+        """Put the chosen period's dates into the editors, then report it.
+
+        ``None`` is Custom, which means leave the dates exactly as they are -
+        the point of Custom is that you set them.
+        """
+        if chosen is None:
+            self.changed.emit()
+            return
+        self._quiet = True
+        if chosen == self.ALL:
+            # No start date at all, so the From editor has nothing to say.
+            if self.with_from:
+                self.from_edit.setEnabled(False)
+            self.to_edit.setDate(to_qdate(date.today()))
+        else:
+            if self.with_from:
+                self.from_edit.setEnabled(True)
+                self.from_edit.setDate(to_qdate(chosen.start))
+            # The year in progress runs to TODAY, not to its close: a balance
+            # sheet dated next March, with nothing posted between, tells you
+            # nothing you did not already know.
+            self.to_edit.setDate(to_qdate(min(chosen.end, date.today())))
+        self._quiet = False
         self.changed.emit()
 
+    def _date_typed(self, *_) -> None:
+        """A date changed by hand: the period is no longer a whole year."""
+        if self._quiet:
+            return
+        self._mark_custom()
+        self.changed.emit()
+
+    def _mark_custom(self) -> None:
+        index = self.year_box.findText(self.CUSTOM)
+        if index >= 0 and self.year_box.currentIndex() != index:
+            self._quiet = True
+            self.year_box.setCurrentIndex(index)
+            self._quiet = False
+
+    def selected_year(self):
+        """The chosen financial year, or None for custom or all dates."""
+        chosen = self.year_box.currentData()
+        return chosen if isinstance(chosen, acc.FinancialYear) else None
+
     def range(self) -> tuple[date | None, date]:
-        if self.with_from and self.since.isChecked():
-            return None, from_qdate(self.to_edit.date())
-        if not self.with_from:
+        """The period, as ``accounting`` wants it: None means no start date."""
+        if self.year_box.currentData() == self.ALL or not self.with_from:
             return None, from_qdate(self.to_edit.date())
         return from_qdate(self.from_edit.date()), from_qdate(self.to_edit.date())
 
@@ -948,7 +1046,10 @@ class ProfitLossScreen(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(heading("Profit & Loss"))
         self.period = PeriodBar()
-        self.period.since.setChecked(True)
+        # Opens on the financial year, not on since-books-began as it used to:
+        # a profit and loss account is a statement FOR a year, and with a year
+        # dropdown on the screen the period should agree with what it says.
+        # Since-books-began is still one choice away in the same dropdown.
         self.period.changed.connect(self.refresh)
         layout.addWidget(self.period)
 
@@ -1895,6 +1996,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_title()
         self.voucher.reload_ledgers()
         self.ledger.reload_ledgers()
+        # The financial-year start month is on that screen, and it decides
+        # what the years ARE - so the dropdowns have to be rebuilt, not just
+        # the reports re-run.
+        for _, widget in self.screens:
+            bar = getattr(widget, "period", None)
+            if isinstance(bar, PeriodBar):
+                bar.reload_years()
         for _, widget in self.screens:
             if widget is not self.company and hasattr(widget, "refresh"):
                 widget.refresh()

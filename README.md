@@ -262,6 +262,46 @@ Balances are held **debit-positive** internally: `+500` is 500 Dr, `-500` is
 | **Masters** | Create and alter ledgers and sub-groups. |
 | **Company** | Who the books belong to: name, address, PAN, GSTIN, TAN, CIN, financial year, currency. |
 
+## Choosing the period
+
+Every report carries a **Period** dropdown listing the financial years the
+books touch — `FY 2025-2026`, `FY 2026-2027` — so "the balance sheet for
+2025-2026" is one choice rather than two typed dates. The From/To editors stay
+beside it for a period that is not a whole year.
+
+The year in progress is reported **up to today**, not to its close: a balance
+sheet dated next March, with nothing posted between, tells you nothing the
+present one does not. A closed year reports to its last day.
+
+The list comes from the **data** — voucher dates and the books-begin date — so
+it grows by itself and there is nothing to maintain. The year before the
+current one is offered even with nothing posted in it, because comparing with
+last year is routine and a prior-year balance sheet is meaningful from the
+opening balances alone. Earlier years than that have to be earned by a voucher
+dated in them.
+
+A financial year is **not** assumed to start in April. It follows
+`fy_start_month` on the Company screen, and books that run the calendar year
+are a different shape rather than a special case: the year ends in December of
+its own year and is labelled `2026`, since `2026-2026` would be nonsense.
+
+Editing a date by hand moves the dropdown to **Custom dates**. Leaving it
+reading "FY 2026-2027" over a period that is no longer that year would be a
+lie about what you are looking at — and the one thing a report must not do is
+misdescribe its own period. Period reports (Day Book, Ledger, P&L) also carry
+**Since books began** in the same dropdown rather than beside it as a tickbox:
+it is one of the periods you can choose, and a row holding both was 1468px
+wide at the largest text size, over the 1400px ceiling.
+
+The arithmetic is in `accounting.py` — `fy_bounds`, `fy_label`,
+`financial_years`, `current_financial_year` — and **shared by both front
+ends**, which each used to work it out for themselves. That is two places for
+"when does the year end" to be wrong in different ways. `test_books.py` works
+the boundaries by hand: April and January years, the first and last day of a
+year, a leap day, an unbroken run of years with no gaps or repeats, and a
+start month that is garbage falling back to April rather than stopping the
+reports from opening.
+
 ## The rules it enforces, and the ones it only advises
 
 **Hard:** a voucher must balance, needs at least two lines, across at least two
@@ -341,3 +381,19 @@ no tolerance, including after edits, deletes and custom sub-groups.
 the desktop build is tested rather than only eyeballed: function keys, the
 disabled Accept button, the balance check, the voucher-type advice, posting,
 altering from the Day Book, and creating masters.
+
+What a screen LOOKS like is the one thing these cannot assert. `screenshot.py`
+renders the real screens to PNGs in `shots/`, so a change to any of them can be
+compared against the build before it:
+
+```bash
+python screenshot.py                        # every scheme, three screens
+python screenshot.py --scheme dark --tag after
+python screenshot.py --screens 0 3          # Voucher Entry, Trial Balance
+```
+
+It copies your books into a scratch folder and pins `BOOKS_DB` to the copy, so
+taking a screenshot cannot write to `data/`, and it never shows the window. It
+runs on the *native* platform rather than offscreen on purpose: Light keeps the
+native widget style, and offscreen would render it as Fusion — that is, not the
+thing being judged.

@@ -10,7 +10,7 @@ import os
 import sys
 import shutil
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -537,7 +537,87 @@ settle()
 check("the Company screen is not over-wide",
       co.minimumSizeHint().width() <= WIDTH_CEILING, True)
 
-print("\n18) Choosing a company at launch")
+print("\n18) Choosing the financial year on a report")
+window.show_screen(5)                       # Balance Sheet, an as-at report
+bar = window.sheet.period
+labels = [bar.year_box.itemText(i) for i in range(bar.year_box.count())]
+check("the years are offered, newest last and Custom after them",
+      labels[-1], bar.CUSTOM)
+check("every financial year in the books is listed",
+      [f"FY {y.label}" for y in acc.financial_years()], labels[:-1])
+check("it opens on the year in progress",
+      bar.selected_year().contains(date.today()), True)
+check("an as-at report offers no since-books-began",
+      bar.SINCE in labels, False)
+
+# Picking last year must move the report, not just the dropdown.
+last_year = acc.financial_years()[-2]
+bar.year_box.setCurrentText(f"FY {last_year.label}")
+settle()
+check("picking a year sets the as-at date to its close",
+      desktop.from_qdate(bar.to_edit.date()), last_year.end)
+check("and the report followed", bar.range()[1], last_year.end)
+check("the balance sheet still agrees in that year",
+      "Both sides agree" in window.sheet.status.text(), True)
+
+# The year in progress is reported up to TODAY, not to a date in the future.
+current = acc.current_financial_year()
+bar.year_box.setCurrentText(f"FY {current.label}")
+settle()
+check("the year in progress runs only to today",
+      desktop.from_qdate(bar.to_edit.date()), date.today())
+
+# A date typed by hand is no longer a whole year, and the dropdown must not
+# go on claiming that it is.
+bar.to_edit.setDate(desktop.to_qdate(date.today() - timedelta(days=9)))
+settle()
+check("editing a date moves the dropdown to Custom",
+      bar.year_box.currentText(), bar.CUSTOM)
+check("and no year is reported as selected", bar.selected_year(), None)
+
+# A period report has the same dropdown, plus since-books-began in it.
+window.show_screen(4)                       # Profit & Loss
+pl = window.profit.period
+pl_labels = [pl.year_box.itemText(i) for i in range(pl.year_box.count())]
+check("a period report offers since-books-began first",
+      pl_labels[0], pl.SINCE)
+check("the P&L opens on a financial year, not on all dates",
+      pl.selected_year() is not None, True)
+check("choosing a year fills both dates",
+      (desktop.from_qdate(pl.from_edit.date()), desktop.from_qdate(pl.to_edit.date())),
+      (current.start, date.today()))
+pl.year_box.setCurrentText(pl.SINCE)
+settle()
+check("since-books-began reports no start date", pl.range()[0], None)
+check("and the From date is disabled, having nothing to say",
+      pl.from_edit.isEnabled(), False)
+whole_book = acc.profit_and_loss(None, date.today())["totals"]["net_profit"]
+check("the net profit is the whole-book figure",
+      f"{abs(whole_book):,.2f}" in window.profit.net_label.text(), True)
+
+# The year list is derived from the books, so a voucher in an older year has
+# to make that year reachable - otherwise there is no way to report on it.
+db.save_voucher(
+    voucher_type="Journal", voucher_date=date(date.today().year - 3, 6, 1),
+    narration="an older year",
+    lines=[{"ledger_id": db.ledger_id("Cash"), "debit": 5, "credit": 0},
+           {"ledger_id": db.ledger_id("Sales"), "debit": 0, "credit": 5}])
+window.sheet.period.reload_years()
+settle()
+grown = [window.sheet.period.year_box.itemText(i)
+         for i in range(window.sheet.period.year_box.count())]
+check("an older voucher adds its year to the dropdown",
+      len(grown) > len(labels), True)
+# Rebuilding the list must not quietly move the period you are looking at -
+# this bar was left on custom dates above, and stays there.
+check("a custom period survives the list being rebuilt",
+      window.sheet.period.year_box.currentText(), window.sheet.period.CUSTOM)
+window.sheet.period.year_box.setCurrentText(f"FY {current.label}")
+settle()
+check("and a year can be chosen again afterwards",
+      window.sheet.period.selected_year().contains(date.today()), True)
+
+print("\n19) Choosing a company at launch")
 
 # This suite pins BOOKS_DB, which is exactly the case where the picker must
 # NOT appear: the caller has already chosen the file.

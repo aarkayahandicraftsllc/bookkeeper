@@ -15,6 +15,10 @@ than hide it, the trial balance and the balance sheet both show the residual as
 
 from __future__ import annotations
 
+import calendar
+from datetime import date, timedelta
+from typing import NamedTuple
+
 import pandas as pd
 
 import db
@@ -27,6 +31,116 @@ LIABILITY_SIDE = ["Capital Account", "Loans (Liability)", "Current Liabilities",
                   "Suspense A/c"]
 ASSET_SIDE = ["Fixed Assets", "Investments", "Current Assets",
               "Misc. Expenses (Asset)"]
+
+
+# --------------------------------------------------------------------------- #
+# financial years
+# --------------------------------------------------------------------------- #
+# A financial year is not the calendar year: in India it runs April to March,
+# and the month it opens on is a company setting, so every one of these is
+# derived from ``fy_start_month`` rather than assumed. Shared by both front
+# ends, which each had their own partial copy of this arithmetic before.
+class FinancialYear(NamedTuple):
+    label: str
+    start: date
+    end: date
+
+    def contains(self, day: date) -> bool:
+        return self.start <= day <= self.end
+
+
+def fy_start_month() -> int:
+    """The month the financial year opens on, 1-12. April unless told
+    otherwise, and anything out of range falls back to April rather than
+    producing a year that cannot exist."""
+    try:
+        month = int(db.get_setting("fy_start_month", "4"))
+    except ValueError:
+        return 4
+    return month if 1 <= month <= 12 else 4
+
+
+def fy_bounds(day: date, start_month: int | None = None) -> tuple[date, date]:
+    """First and last day of the financial year containing ``day``."""
+    if start_month is None:
+        start_month = fy_start_month()
+    start_year = day.year if day.month >= start_month else day.year - 1
+    start = date(start_year, start_month, 1)
+    # A year starting in January ends that same December; any other start
+    # month ends in the month BEFORE it, the following calendar year.
+    end_month = 12 if start_month == 1 else start_month - 1
+    end_year = start_year if start_month == 1 else start_year + 1
+    end = date(end_year, end_month,
+               calendar.monthrange(end_year, end_month)[1])
+    return start, end
+
+
+def fy_label(start: date, start_month: int | None = None) -> str:
+    """'2025-2026' - or just '2026' for books that run the calendar year,
+    because '2026-2026' would be nonsense."""
+    if start_month is None:
+        start_month = fy_start_month()
+    if start_month == 1:
+        return str(start.year)
+    return f"{start.year}-{start.year + 1}"
+
+
+def financial_years() -> list[FinancialYear]:
+    """Every financial year these books touch, earliest first.
+
+    Derived from the data - the voucher dates and the books-begin date - so
+    the list grows by itself as vouchers are entered and there is nothing to
+    maintain. The year containing TODAY is always included even in empty
+    books, because that is the one you are about to post into.
+
+    Opening balances carry no date of their own, which is what
+    ``books_begin`` is for: without it, books whose vouchers all fall in the
+    current year would offer no way to look at the year the openings came
+    from.
+    """
+    today = date.today()
+    month = fy_start_month()
+    # Today's year, and the one before it. The previous year is offered even
+    # with nothing posted in it: comparing against last year is routine, and a
+    # balance sheet as at its close is meaningful from the opening balances
+    # alone. Earlier years than that have to be earned by the data.
+    marks = [today, fy_bounds(today, month)[0] - timedelta(days=1)]
+
+    begins = db.get_setting("books_begin", "")
+    if begins:
+        try:
+            marks.append(date.fromisoformat(begins))
+        except ValueError:
+            pass
+
+    vouchers = db.get_vouchers()
+    if not vouchers.empty:
+        dates = pd.to_datetime(vouchers["voucher_date"], errors="coerce")
+        dates = dates.dropna()
+        if not dates.empty:
+            marks += [dates.min().date(), dates.max().date()]
+
+    first = min(fy_bounds(mark, month)[0] for mark in marks)
+    last = max(fy_bounds(mark, month)[0] for mark in marks)
+
+    years, start = [], first
+    while start <= last:
+        begin, end = fy_bounds(start, month)
+        years.append(FinancialYear(fy_label(begin, month), begin, end))
+        # Step by a year from the START of the year, never by 365 days: a leap
+        # year would otherwise drift the month and eventually skip one.
+        start = date(begin.year + 1, begin.month, 1)
+    return years
+
+
+def current_financial_year() -> FinancialYear:
+    """The financial year containing today."""
+    today = date.today()
+    for year in financial_years():
+        if year.contains(today):
+            return year
+    begin, end = fy_bounds(today)
+    return FinancialYear(fy_label(begin), begin, end)
 
 
 def side_of(amount: float) -> str:

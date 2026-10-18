@@ -95,16 +95,44 @@ def bump(name: str) -> None:
     st.session_state[f"nonce_{name}"] = nonce(name) + 1
 
 
-def fy_bounds(today: date, start_month: int) -> tuple[date, date]:
-    start_year = today.year if today.month >= start_month else today.year - 1
-    start = date(start_year, start_month, 1)
-    end_month = 12 if start_month == 1 else start_month - 1
-    end_year = start_year if start_month == 1 else start_year + 1
-    end = date(end_year, end_month, calendar.monthrange(end_year, end_month)[1])
-    return start, end
+# The financial-year arithmetic lives in accounting.py, shared with the
+# desktop app: both front ends used to work it out for themselves, which is
+# two places for "when does the year end" to be wrong in different ways.
+FY_START, FY_END = acc.fy_bounds(date.today(), FY_START_MONTH)
 
 
-FY_START, FY_END = fy_bounds(date.today(), FY_START_MONTH)
+def year_periods() -> dict[str, tuple[date, date]]:
+    """Each financial year in the books, as a pickable period.
+
+    The year in progress runs to TODAY rather than to its close - a report
+    dated months into the future shows nothing the present one does not.
+    """
+    return {f"FY {year.label}": (year.start, min(year.end, date.today()))
+            for year in acc.financial_years()}
+
+
+def default_year() -> str:
+    return f"FY {acc.current_financial_year().label}"
+
+
+def as_at_picker(key: str, label: str = "Financial year") -> date:
+    """The date an as-at report is drawn at: a year's close, or your own date.
+
+    "The balance sheet for 2025-2026" is how the question gets asked, and
+    reaching it by typing a date is needless work.
+    """
+    closes = {name: end for name, (_, end) in year_periods().items()}
+    names = list(closes) + ["Custom date"]
+    index = names.index(default_year()) if default_year() in names else 0
+    left, right = st.columns([2, 2])
+    with left:
+        choice = st.selectbox(label, names, index=index, key=f"{key}_year")
+    if choice == "Custom date":
+        with right:
+            return st.date_input("As at", value=date.today(),
+                                 format="DD/MM/YYYY", key=f"{key}_asat")
+    st.caption(f"As at {closes[choice].strftime('%d/%m/%Y')}")
+    return closes[choice]
 
 
 def period_picker(key: str, allow_all: bool = True) -> tuple[date | None, date]:
@@ -113,16 +141,19 @@ def period_picker(key: str, allow_all: bool = True) -> tuple[date | None, date]:
     month_end = date.today().replace(
         day=calendar.monthrange(date.today().year, date.today().month)[1])
     options = {
-        "This financial year": (FY_START, min(FY_END, date.today())),
+        **year_periods(),
         "This month": (month_start, min(month_end, date.today())),
         "Custom": None,
     }
     if allow_all:
         options = {"Since books began": (None, date.today()), **options}
 
+    names = list(options)
+    index = names.index(default_year()) if default_year() in names else 0
     left, right = st.columns([2, 3])
     with left:
-        choice = st.selectbox("Period", list(options), key=f"{key}_period")
+        choice = st.selectbox("Period", names, index=index,
+                              key=f"{key}_period")
     if choice == "Custom":
         with right:
             picked = st.date_input(
@@ -433,12 +464,8 @@ with tab_ledger:
 # --------------------------------------------------------------------------- #
 with tab_trial:
     st.subheader("Trial Balance")
-    tb1, tb2 = st.columns([2, 2])
-    with tb1:
-        as_at = st.date_input("As at", value=date.today(), format="DD/MM/YYYY",
-                              key="tb_asat")
-    with tb2:
-        grouped = st.toggle("Summarise by group", key="tb_group")
+    as_at = as_at_picker("tb")
+    grouped = st.toggle("Summarise by group", key="tb_group")
     trial = acc.trial_balance(as_at, by_group=grouped)
 
     k1, k2, k3 = st.columns(3)
@@ -534,8 +561,7 @@ with tab_pl:
 # --------------------------------------------------------------------------- #
 with tab_bs:
     st.subheader("Balance Sheet")
-    bs_as_at = st.date_input("As at", value=date.today(), format="DD/MM/YYYY",
-                             key="bs_asat")
+    bs_as_at = as_at_picker("bs")
     sheet = acc.balance_sheet(bs_as_at)
 
     b1, b2, b3 = st.columns(3)
