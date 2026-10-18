@@ -822,11 +822,20 @@ class PeriodBar(QtWidgets.QWidget):
         row = QtWidgets.QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
 
-        row.addWidget(QtWidgets.QLabel("Period"))
+        # A trial balance and a balance sheet are drawn AT A MOMENT - their
+        # balances run from the beginning of the books however the period is
+        # set - so they are labelled for what they are. Left as "Period ... To"
+        # they read as half a control, a To with the From missing, next to the
+        # "From ... To" the period reports show.
+        row.addWidget(QtWidgets.QLabel("Period" if with_from else "Year"))
         self.year_box = QtWidgets.QComboBox()
         self.year_box.setToolTip(
             "The financial year to report on. The years come from the books, "
-            "and the month one opens on is set on the Company screen.")
+            "and the month one opens on is set on the Company screen."
+            if with_from else
+            "The financial year to report at the close of. The years come "
+            "from the books, and the month one opens on is set on the "
+            "Company screen.")
         self.year_box.currentIndexChanged.connect(self._year_chosen)
         row.addWidget(self.year_box)
 
@@ -838,7 +847,7 @@ class PeriodBar(QtWidgets.QWidget):
             self.from_edit.dateChanged.connect(self._date_typed)
             row.addWidget(self.from_edit)
 
-        row.addWidget(QtWidgets.QLabel("To"))
+        row.addWidget(QtWidgets.QLabel("To" if with_from else "As at"))
         self.to_edit = QtWidgets.QDateEdit(to_qdate(date.today()))
         self.to_edit.setCalendarPopup(True)
         self.to_edit.setDisplayFormat("dd/MM/yyyy")
@@ -929,6 +938,9 @@ class PeriodBar(QtWidgets.QWidget):
                  else acc.current_financial_year().start)
         dialog = PeriodDialog(start, from_qdate(self.to_edit.date()),
                               self.with_from, self)
+        # Parented for its position and palette, but released afterwards:
+        # without this one lingers on the bar for every custom period chosen.
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             # Nothing changed, so the dropdown must not read as though it did.
             self._quiet = True

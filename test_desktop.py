@@ -824,6 +824,25 @@ check("and puts the dropdown back", bar.year_box.currentText(),
       f"FY {year.label}")
 desktop.PeriodDialog.exec = _real_exec
 
+# An as-at report must not be labelled as though it covered a period. Left as
+# "Period ... To" it reads as half a control - a To with the From missing -
+# next to the "From ... To" that the period reports show.
+check("an as-at report is labelled for the moment it is drawn at",
+      [lbl.text() for lbl in
+       window.sheet.period.findChildren(QtWidgets.QLabel)
+       if lbl.parent() is window.sheet.period],
+      ["Year", "As at"])
+check("a period report is labelled for the span it covers",
+      [lbl.text() for lbl in
+       window.profit.period.findChildren(QtWidgets.QLabel)
+       if lbl.parent() is window.profit.period],
+      ["Period", "From", "To"])
+check("the trial balance is labelled the same way as the balance sheet",
+      [lbl.text() for lbl in
+       window.trial.period.findChildren(QtWidgets.QLabel)
+       if lbl.parent() is window.trial.period],
+      ["Year", "As at"])
+
 # The real data folder must be untouched by any of this.
 check("the suite wrote only into its sandbox",
       str(db.DATA_DIR).startswith(str(Path(tempfile.gettempdir()))), True)
