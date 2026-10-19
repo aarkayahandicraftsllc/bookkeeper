@@ -27,7 +27,7 @@ Tally for data entry. The desktop app is for entry; use either for reports.
 | `Ctrl+1` … `Ctrl+8` | Jump between screens (`Ctrl+8` is Company) |
 | `Ctrl+S` | Save the company details, on that screen |
 | `F3` | Switch company |
-| `Alt+C` | Create a ledger from the line you are on |
+| `Alt+L` | Create a ledger from the line you are on |
 | `F2` | Set the voucher date |
 | `F11` | Refresh every report |
 | `Esc` | Back to voucher entry |
@@ -263,10 +263,15 @@ further to write.
 
 ## Creating masters mid-voucher
 
-You rarely know every account before you start entering. Press **Alt+C** (or
+You rarely know every account before you start entering. Press **Alt+L** (or
 the *Create ledger* button) on the voucher screen and the ledger is created
-there and then, dropped into the line you were on, and usable immediately — the
-same idea as Tally's Alt+C.
+there and then, dropped into the line you were on, and usable immediately.
+
+> The shortcut is **Alt+L, not Alt+C**. Two reasons: the menu bar holds
+> `&Company`, and a menu-bar mnemonic beats a widget shortcut, so Alt+C only
+> ever opened that menu — the shortcut never fired. Alt+C is also the key
+> Tally uses, and this app deliberately does not copy its shortcuts. Any new
+> Alt shortcut has to dodge the menu letters G, V, R, C and S.
 
 Two details that make it worth using rather than breaking off:
 

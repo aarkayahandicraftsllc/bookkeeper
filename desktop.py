@@ -575,7 +575,7 @@ def totals_bar(*pairs: tuple[str, str]) -> QtWidgets.QWidget:
 
 
 # --------------------------------------------------------------------------- #
-# create-master dialogs, reachable mid-voucher the way Tally's Alt+C is
+# create-master dialogs, reachable mid-voucher without losing the voucher
 # --------------------------------------------------------------------------- #
 class GroupDialog(QtWidgets.QDialog):
     """Create a sub-group without leaving whatever you were doing."""
@@ -788,9 +788,9 @@ class VoucherScreen(QtWidgets.QWidget):
         add.clicked.connect(lambda: self._add_row())
         remove = QtWidgets.QPushButton("Remove line")
         remove.clicked.connect(self._remove_row)
-        create = QtWidgets.QPushButton("Create ledger  (Alt+C)")
-        create.setToolTip("Create a ledger without leaving this voucher, the "
-                          "way Tally's Alt+C does")
+        create = QtWidgets.QPushButton("Create ledger  (Alt+L)")
+        create.setToolTip("Create a ledger without leaving this voucher — "
+                          "whatever you have typed into the line is kept")
         create.clicked.connect(self.create_ledger)
         buttons.addWidget(add)
         buttons.addWidget(remove)
@@ -835,7 +835,11 @@ class VoucherScreen(QtWidgets.QWidget):
         bottom.addWidget(self.accept_button)
         layout.addLayout(bottom)
 
-        shortcut = QtGui.QShortcut(QtGui.QKeySequence("Alt+C"), self)
+        # Alt+L, not Alt+C: the menu bar holds "&Company", and a menu-bar
+        # mnemonic WINS over a widget shortcut, so Alt+C opened that menu and
+        # this never fired. Any new Alt shortcut must dodge the menu letters
+        # (G, V, R, C, S) for the same reason.
+        shortcut = QtGui.QShortcut(QtGui.QKeySequence("Alt+L"), self)
         shortcut.setContext(QtCore.Qt.WidgetWithChildrenShortcut)
         shortcut.activated.connect(self.create_ledger)
 
@@ -954,7 +958,7 @@ class VoucherScreen(QtWidgets.QWidget):
 
     # --- actions ------------------------------------------------------- #
     def create_ledger(self) -> None:
-        """Tally's Alt+C: make the ledger here, then use it on this line.
+        """Alt+L: make the ledger here, then use it on this line.
 
         Whatever has been typed into the current cell is carried into the
         dialog as the name, so a half-typed account is not wasted.
@@ -2397,7 +2401,7 @@ class MainWindow(QtWidgets.QMainWindow):
         accept.setShortcut(QtGui.QKeySequence("Ctrl+A"))
         accept.triggered.connect(self._accept)
         voucher_menu.addAction(accept)
-        create_master = QtGui.QAction("Create ledger	Alt+C", self)
+        create_master = QtGui.QAction("Create ledger	Alt+L", self)
         create_master.triggered.connect(
             lambda: (self.show_screen(0), self.voucher.create_ledger()))
         voucher_menu.addAction(create_master)

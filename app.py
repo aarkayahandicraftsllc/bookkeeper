@@ -258,8 +258,9 @@ def voucher_editor(prefix: str = "vch", existing: dict | None = None,
 
     with st.expander("➕ Create a ledger or group without leaving this voucher"):
         st.caption(
-            "The same idea as Tally's Alt+C. Anything already typed into the "
-            "grid is kept — creating a master only reloads the ledger list."
+            "Anything already typed into the grid is kept — creating a master "
+            "only reloads the ledger list. The desktop app does this with "
+            "**Alt+L**."
         )
         make = st.radio("Create", ["Ledger", "Group"], horizontal=True,
                         key=k("make"))

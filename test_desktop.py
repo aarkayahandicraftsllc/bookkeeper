@@ -28,6 +28,7 @@ SANDBOX.mkdir(parents=True, exist_ok=True)
 os.environ["BOOKS_DIR"] = str(SANDBOX)
 
 from PySide6 import QtCore, QtGui, QtWidgets  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 
 import accounting as acc  # noqa: E402
 import db  # noqa: E402
@@ -185,9 +186,27 @@ check("the opening difference is now reported",
 check("the status bar says so",
       "opening balances" in window.statusBar().currentMessage(), True)
 
-print("\n11) Creating a ledger mid-voucher, Tally's Alt+C")
+print("\n11) Creating a ledger mid-voucher (Alt+L)")
 voucher = window.voucher
 voucher.reset()
+
+# The shortcut must not be a letter the menu bar already owns: a menu-bar
+# mnemonic BEATS a widget shortcut, which is why Alt+C silently opened the
+# Company menu and never created a ledger.
+menu_letters = {m.title().split("&")[1][0].upper()
+                for m in window.menuBar().findChildren(QtWidgets.QMenu)
+                if "&" in m.title()}
+shortcuts = [s for s in voucher.findChildren(QtGui.QShortcut)
+             if s.key().toString().startswith("Alt+")]
+check("the voucher screen has one Alt shortcut", len(shortcuts), 1)
+check("and it is Alt+L", shortcuts[0].key().toString(), "Alt+L")
+check("L is not claimed by a menu", "L" in menu_letters, False)
+check("C still is, which is what broke it", "C" in menu_letters, True)
+labels = [b.text() for b in voucher.findChildren(QtWidgets.QPushButton)]
+check("the button advertises the same key",
+      any("(Alt+L)" in text for text in labels), True)
+check("and nothing still advertises Alt+C",
+      any("Alt+C" in text for text in labels), False)
 # type a half-finished name into the first line, as you would before realising
 # the ledger does not exist yet
 voucher.grid.cellWidget(0, 0).setCurrentText("Courier Charges")
@@ -1055,6 +1074,33 @@ check("and gives the number up",
       db.next_voucher_number("Journal"), number_before - 1)
 QtWidgets.QMessageBox.question = _real_question
 voucher.reset()
+
+print("\n24) The Alt+L shortcut actually fires")
+# Binding a key is not the same as the key working, which is the whole lesson
+# of the Alt+C bug - so press it for real and see whether the action runs.
+# This goes LAST because a WidgetWithChildrenShortcut only fires inside an
+# ACTIVE window: showing the window realises its geometry, and the width
+# checks above read window.width(), which would then report the size clamped
+# to the 800x800 offscreen display instead of the unrealised hint.
+voucher = window.voucher
+window.show_screen(0)
+window.show()
+app.processEvents()
+_real_create = voucher.create_ledger
+_fired = []
+voucher.create_ledger = lambda: _fired.append(True)
+voucher.grid.setCurrentCell(0, 0)
+voucher.grid.setFocus()
+QTest.keyClick(voucher.grid, QtCore.Qt.Key_L, QtCore.Qt.AltModifier)
+app.processEvents()
+check("pressing Alt+L really runs it", bool(_fired), True)
+_fired.clear()
+QTest.keyClick(voucher.grid, QtCore.Qt.Key_C, QtCore.Qt.AltModifier)
+app.processEvents()
+check("and Alt+C no longer does anything here", bool(_fired), False)
+voucher.create_ledger = _real_create
+window.hide()
+app.processEvents()
 
 # The real data folder must be untouched by any of this.
 check("the suite wrote only into its sandbox",
