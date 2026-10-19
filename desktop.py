@@ -2489,13 +2489,24 @@ class MainWindow(QtWidgets.QMainWindow):
         company_menu.addSeparator()
         backup = QtGui.QAction("Back up now\tCtrl+B", self)
         backup.setShortcut(QtGui.QKeySequence("Ctrl+B"))
-        backup.setToolTip("Copy these books into the backup folder. One is "
-                          "also taken automatically every time the app opens.")
+        backup.setToolTip("Copy these books into the backup folder now. You "
+                          "are also offered one every time the app closes.")
         backup.triggered.connect(self.backup_now)
         company_menu.addAction(backup)
         open_folder = QtGui.QAction("Open backup folder", self)
         open_folder.triggered.connect(self.open_backup_folder)
         company_menu.addAction(open_folder)
+
+        company_menu.addSeparator()
+        quit_action = QtGui.QAction("Exit\tCtrl+Q", self)
+        quit_action.setShortcut(QtGui.QKeySequence("Ctrl+Q"))
+        quit_action.setToolTip("Close Bookkeeper. You will be offered a "
+                               "backup on the way out.")
+        # self.close(), NEVER app.quit(): quit tears down the event loop
+        # without closing the window, so closeEvent never runs and the backup
+        # offer - the whole point of closing cleanly - is skipped in silence.
+        quit_action.triggered.connect(self.close)
+        company_menu.addAction(quit_action)
 
         settings_menu = bar.addMenu("&Settings")
 

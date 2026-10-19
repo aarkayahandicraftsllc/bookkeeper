@@ -873,6 +873,60 @@ check("backups are not offered as companies",
       [c for c in db.list_companies() if "-close" in c["file"]
        or "-manual" in c["file"]], [])
 
+print("\n20b) Company > Exit leaves the same way the X does")
+_exit = next((a for a in window.findChildren(QtGui.QAction)
+              if a.text().startswith("Exit")), None)
+check("the Company menu offers Exit", _exit is not None, True)
+check("and it really is on that menu",
+      any(a is _exit for m in window.menuBar().actions() if m.menu()
+          and m.menu().title() == "&Company" for a in m.menu().actions()),
+      True)
+check("on Ctrl+Q", _exit.shortcut().toString(), "Ctrl+Q")
+
+# The point of the check: it must go through closeEvent, so the backup offer
+# happens. app.quit() would end the event loop without closing the window and
+# skip it in silence - which is the one way to get this wrong.
+db.save_voucher(voucher_type="Journal", voucher_date=date.today(),
+                narration="entered before exiting",
+                lines=[{"ledger_id": db.ledger_id("Cash"), "debit": 11,
+                        "credit": 0},
+                       {"ledger_id": db.ledger_id("Sales"), "debit": 0,
+                        "credit": 11}])
+_before = len(db.backups_for())
+_answer("yes")
+_exit.trigger()
+QtWidgets.QApplication.processEvents()
+check("triggering Exit asks about the backup and writes one",
+      len(db.backups_for()), _before + 1)
+check("tagged as a close-time copy",
+      "-close" in db.backups_for()[0].name, True)
+
+# And Cancel in that dialog must keep the app open.
+db.save_voucher(voucher_type="Journal", voucher_date=date.today(),
+                narration="and again",
+                lines=[{"ledger_id": db.ledger_id("Cash"), "debit": 12,
+                        "credit": 0},
+                       {"ledger_id": db.ledger_id("Sales"), "debit": 0,
+                        "credit": 12}])
+_before = len(db.backups_for())
+# Shown first, because the Exit above really did close it - so without this
+# the check below would pass on a window that was already gone.
+window.show()
+QtWidgets.QApplication.processEvents()
+check("the window is open to begin with", window.isHidden(), False)
+_answer("cancel")
+_exit.trigger()
+QtWidgets.QApplication.processEvents()
+check("Cancel calls the exit off and the window stays open",
+      window.isHidden(), False)
+check("and writes nothing", len(db.backups_for()), _before)
+desktop.MainWindow.ask_backup_on_close = _real_ask
+# Left SHOWN on purpose. This section is the only one that really closes the
+# window (the checks above call closeEvent directly, which does not), and a
+# window that has actually closed will not take activation again - which the
+# keypress checks in section 24 need.
+QtWidgets.QApplication.processEvents()
+
 print("\n21) Custom dates ask for the dates")
 db.use_company(TMP)
 bar = window.profit.period                 # a period report: From and To

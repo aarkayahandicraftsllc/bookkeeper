@@ -485,8 +485,10 @@ def backup_company(path=None, tag: str = "manual") -> Path | None:
     """Copy a company's books into the backup folder. Returns the file written.
 
     Returns **None** when the books are byte-for-byte what the newest backup
-    already holds: opening the app five times without entering anything should
-    not leave five identical copies and push the useful ones out.
+    already holds: five sessions that entered nothing should not leave five
+    identical copies and push the useful ones out. Callers must SAY so rather
+    than go quiet - see `MainWindow.ask_backup_on_close`, where silence on
+    this path was reported as the backup not working.
 
     Uses SQLite's own online backup rather than a file copy. A plain copy taken
     while a write is in flight can capture a torn database, and the copy looks

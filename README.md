@@ -36,6 +36,7 @@ entry; use either for reports.
 | `Ctrl+P` | Print the report on screen |
 | `Ctrl+E` | Export it to a spreadsheet or CSV |
 | `Ctrl+B` | Back up these books |
+| `Ctrl+Q` | Exit (**Company ▸ Exit**) — offers a backup on the way out |
 | `Ctrl+=` / `Ctrl+-` | Text bigger / smaller |
 
 Voucher types are **Alt+Shift+initial**, not plain `Alt+initial` and not
