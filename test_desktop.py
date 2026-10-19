@@ -758,22 +758,77 @@ window.voucher.reset()
 settle()
 check("resetting clears it again", window.part_entered_rows(), [])
 
-print("\n20) Backing up, on open and on demand")
+print("\n20) Backing up on close, and on demand")
 db.use_company(TMP)
 window.company_file = Path(db.DB_PATH)
 for stale in db.backups_for():
     stale.unlink()
 
-# What main() does before the window is shown.
-window.backup_on_open()
-opened = db.backups_for()
-check("opening the app takes a backup", len(opened), 1)
-check("it is tagged as an open-time copy", "-open" in opened[0].name, True)
+# Nothing is taken on the way IN any more: main() no longer asks for one.
+check("opening the app takes no backup by itself", len(db.backups_for()), 0)
 
-# Opening again with nothing entered must not bury the useful copies.
-window.backup_on_open()
-check("opening again with nothing changed adds nothing",
+# The close-time offer. The dialog is stubbed - a modal box would stop the
+# suite dead - so the three answers are driven through ask_backup_on_close.
+_real_ask = desktop.MainWindow.ask_backup_on_close
+
+
+def _answer(reply):
+    desktop.MainWindow.ask_backup_on_close = lambda self: reply
+
+
+# "Back up and close" writes one, tagged for the moment it was taken.
+_answer("yes")
+_event = QtGui.QCloseEvent()
+window.closeEvent(_event)
+closed = db.backups_for()
+check("closing with Yes writes a backup", len(closed), 1)
+check("tagged as a close-time copy", "-close" in closed[0].name, True)
+check("and the window really closes", _event.isAccepted(), True)
+
+# With nothing changed since, a second close must not bury the useful copies.
+_answer("yes")
+_event = QtGui.QCloseEvent()
+window.closeEvent(_event)
+check("closing again with nothing changed adds nothing",
       len(db.backups_for()), 1)
+
+# "Close without backing up" leaves the folder alone but still closes.
+db.save_voucher(voucher_type="Journal", voucher_date=date.today(),
+                narration="unsaved by choice",
+                lines=[{"ledger_id": db.ledger_id("Cash"), "debit": 3,
+                        "credit": 0},
+                       {"ledger_id": db.ledger_id("Sales"), "debit": 0,
+                        "credit": 3}])
+_answer("no")
+_event = QtGui.QCloseEvent()
+window.closeEvent(_event)
+check("closing with No writes nothing", len(db.backups_for()), 1)
+check("but still closes", _event.isAccepted(), True)
+
+# Cancel must call the close off entirely - including a company switch, which
+# gets here by closing the window.
+_answer("cancel")
+window.switch_requested = True
+_event = QtGui.QCloseEvent()
+window.closeEvent(_event)
+check("Cancel refuses the close", _event.isAccepted(), False)
+check("and calls off a company switch with it",
+      window.switch_requested, False)
+check("still writing nothing", len(db.backups_for()), 1)
+
+# The prompt is SKIPPED when there is nothing new to save, so Yes can never
+# appear to have written a copy that was then deduped away.
+desktop.MainWindow.ask_backup_on_close = _real_ask
+db.backup_company(window.company_file, tag="manual")
+check("with the books already backed up, closing does not ask",
+      window.ask_backup_on_close(), "no")
+check("because the newest backup already holds them",
+      db.backup_is_current(window.company_file), True)
+for stale in db.backups_for():
+    stale.unlink()
+check("with no backup at all there IS something to ask about",
+      db.backup_is_current(window.company_file), False)
+db.backup_company(window.company_file, tag="close")
 
 # Company > Back up now. The dialogs it raises are suppressed, since a modal
 # box would stop the suite dead waiting for a click.
@@ -808,7 +863,7 @@ check("no warning was raised at any point",
 
 # A backup must never show up as a company to open.
 check("backups are not offered as companies",
-      [c for c in db.list_companies() if "-open" in c["file"]
+      [c for c in db.list_companies() if "-close" in c["file"]
        or "-manual" in c["file"]], [])
 
 print("\n21) Custom dates ask for the dates")

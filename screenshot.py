@@ -73,6 +73,12 @@ def main() -> int:
     theme.remember_native_style(app)
     theme.remember_base_font(app)
 
+    # Closing a window offers a backup in a modal dialog, and there is nobody
+    # here to answer it - this would hang waiting for a click. Taking a
+    # picture is not a session worth backing up, and these are a throwaway
+    # copy of the books anyway.
+    desktop.MainWindow.ask_backup_on_close = lambda self: "no"
+
     written = []
     for key in schemes:
         # The window reads its scheme from the books it opens, so set it there

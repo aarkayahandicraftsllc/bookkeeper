@@ -192,20 +192,35 @@ Copies of the books live in **`data/backups/`**, named for the company they
 came from and when they were taken:
 
 ```
-data/backups/books-20261018-150337-open.db
+data/backups/books-20261018-150337-close.db
 data/backups/books-20261018-145823-manual.db
 ```
 
-**One is taken every time the desktop app opens**, before anything is entered,
-so whatever a session does the books as they were are already safe. Switching
-company (`F3`) takes one of the company being opened too, since that comes back
-round the same loop in `main()`.
+**The desktop app offers one when you close it**, so the copy holds the work
+you just did: *Back up and close* / *Close without backing up* / *Cancel*,
+with backing up as the default so Enter on the way out is the safe answer.
+Cancel calls the close off altogether — including a company switch (`F3`),
+which gets there by closing the window, so cancelling means staying on these
+books.
+
+**The offer is skipped when nothing has changed** since the newest backup
+(`db.backup_is_current`). Otherwise *Back up and close* would raise a dialog
+whose Yes writes nothing, because identical books are deduped away — and a
+backup that silently did nothing is worse than no offer at all.
+
+> **What this does not cover.** A close-time backup needs a clean exit. It does
+> **not** run if the app crashes, is killed from Task Manager, or the machine
+> loses power — so a session that ends badly ends with no backup. That is the
+> trade for having the copy contain the current session's work, and it is why
+> `Ctrl+B` still matters before anything you are unsure about. Earlier versions
+> backed up on *open* instead, which always ran but could never hold the
+> session you were in.
 
 **Company ▸ Back up now** (`Ctrl+B`) takes one on demand — for before you do
 something you are unsure about. **Company ▸ Open backup folder** opens it in
-Explorer. Streamlit gets the button but not the automatic copy: it re-runs the
-whole script on every interaction, so "on open" has no meaning in a browser tab
-and hooking it there would copy the books on every click.
+Explorer. Streamlit gets the button but no automatic copy: it re-runs the whole
+script on every interaction and a browser tab has no reliable close, so there
+is no moment to hook.
 
 The last **20** per company are kept (`db.KEEP_BACKUPS`) and older ones pruned.
 These are tens of kilobytes, unlike the 144 MB the exe archive has to ration.

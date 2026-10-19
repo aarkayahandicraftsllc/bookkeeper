@@ -2763,24 +2763,84 @@ class MainWindow(QtWidgets.QMainWindow):
         export_and_open(report, self)
 
     # --- backups ---------------------------------------------------------- #
-    def backup_on_open(self) -> None:
-        """Copy the books before this session touches them.
+    def ask_backup_on_close(self) -> str:
+        """Offer a backup on the way out. Returns "yes", "no" or "cancel".
 
-        Silent when it works: an automatic safety net is not news, and a
-        message here would displace the opening-balance warning the status bar
-        has just put up. LOUD when it fails, though - a backup you believe is
-        being taken and is not is the exact shape of the data loss this
-        project has already had once, and it stayed invisible because nothing
-        ever said otherwise.
+        Asked at CLOSING time (user asked 2026-10-19) rather than taken
+        silently at opening, so the copy holds the work just done instead of
+        the state before it. The cost of that choice, stated here because it
+        is the reason the manual Ctrl+B still matters: a close-time backup
+        needs a clean exit, so a crash, a kill or a power cut leaves this
+        session with no backup at all.
+
+        Switching company comes through here too, since that closes the
+        window - and it is the same "leaving these books" moment, so it gets
+        the same offer. Only the wording differs: a dialog that says
+        "closing" while you are switching is describing the wrong thing.
+
+        Kept apart from `closeEvent` so the decision can be driven in a test.
         """
-        try:
-            db.backup_company(self.company_file, tag="open")
-        except Exception as exc:                      # noqa: BLE001
-            QtWidgets.QMessageBox.warning(
-                self, "Could not back up",
-                f"These books were NOT backed up when the app opened:\n\n"
-                f"{exc}\n\nYour books are fine and you can carry on. Try "
-                f"Company > Back up now, and check there is room on the disk.")
+        # Nothing new to save: asking would only produce a dialog whose Yes
+        # writes nothing, because backup_company dedups on the source hash.
+        if db.backup_is_current(self.company_file):
+            return "no"
+
+        leaving = "switching" if self.switch_requested else "closing"
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle(f"Back up before {leaving}?")
+        box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        box.setText(f"Do you want to back up these books before {leaving}?")
+        box.setInformativeText(
+            f"This saves a copy of {self.company_file.name} as it stands now, "
+            f"including everything entered this session.\n\n"
+            f"{db.KEEP_BACKUPS} backups are kept, in {db.backup_dir()}.")
+        yes = box.addButton(f"Back up and {'switch' if self.switch_requested else 'close'}",
+                            QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        no = box.addButton(
+            f"{'Switch' if self.switch_requested else 'Close'} without "
+            f"backing up", QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+        # Backing up is the default, so Enter on the way out is the safe one.
+        box.setDefaultButton(yes)
+        box.exec()
+        clicked = box.clickedButton()
+        return "yes" if clicked is yes else "no" if clicked is no else "cancel"
+
+    def closeEvent(self, event) -> None:
+        """Offer the backup, and let Cancel call the whole thing off."""
+        choice = self.ask_backup_on_close()
+        if choice == "cancel":
+            # Also cancels a company switch, which closes this window to get
+            # there: staying means staying on THESE books.
+            self.switch_requested = False
+            self._stay()
+            event.ignore()
+            return
+        if choice == "yes":
+            try:
+                made = db.backup_company(self.company_file, tag="close")
+            except Exception as exc:                  # noqa: BLE001
+                # LOUD on failure - a backup you believe is being taken and is
+                # not is the exact shape of the data loss this project has
+                # already had once, and it stayed invisible because nothing
+                # ever said otherwise. Asked again rather than closing over it.
+                again = QtWidgets.QMessageBox.warning(
+                    self, "Could not back up",
+                    f"These books were NOT backed up:\n\n{exc}\n\nYour books "
+                    f"on disk are fine. Close anyway?",
+                    QtWidgets.QMessageBox.StandardButton.Close
+                    | QtWidgets.QMessageBox.StandardButton.Cancel,
+                    QtWidgets.QMessageBox.StandardButton.Cancel)
+                if again != QtWidgets.QMessageBox.StandardButton.Close:
+                    self.switch_requested = False
+                    self._stay()
+                    event.ignore()
+                    return
+            else:
+                if made is None:
+                    self.statusBar().showMessage(
+                        "Already backed up - nothing had changed.", 4000)
+        super().closeEvent(event)
 
     def backup_now(self) -> None:
         """Company > Back up now, for before you do something you are unsure
@@ -2896,10 +2956,10 @@ def main() -> int:
     # different database.
     while True:
         window = MainWindow()
-        # Before anything is entered: whatever this session does, the books as
-        # they were on opening are already safe on disk. Also covers switching
-        # company, which comes back round this loop.
-        window.backup_on_open()
+        # No backup on the way IN any more (user asked 2026-10-19) - the window
+        # offers one on the way OUT instead, via closeEvent, so the copy holds
+        # the work just done. Switching company closes the window to come back
+        # round this loop, so it gets the same offer.
         window.show()
         if ask_on_open:
             # After the window is up and painted, not before it.

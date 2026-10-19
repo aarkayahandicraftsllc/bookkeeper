@@ -47,6 +47,14 @@ def check(label, got, want):
 
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
+# Closing a window - which is also how switching company works - offers a
+# backup in a MODAL dialog, and there is nobody here to click it. Answer "no"
+# throughout: this suite is about which books are open, and the backup offer
+# has its own checks in test_desktop.py. Without this the suite hangs.
+BACKUP_ANSWERS = []
+desktop.MainWindow.ask_backup_on_close = (
+    lambda self: BACKUP_ANSWERS.append(self.company_file.name) or "no")
+
 print("\n1) The app opens WITHOUT being asked to create anything")
 check("the data file is not pinned", db.DB_PINNED, False)
 check("no companies to begin with", db.company_files(), [])
@@ -169,7 +177,15 @@ check("and points the data layer at it",
       Path(db.DB_PATH).name, made["Alpha Exports"].name)
 check("and remembers it for next launch",
       db.last_company().name, made["Alpha Exports"].name)
+
+# The backup offer on a switch must be about the books being LEFT, not the
+# ones being opened: _open_company points the data layer at the new file
+# before closing the window, so anything reading db.DB_PATH here would offer
+# to back up the wrong company.
+BACKUP_ANSWERS.clear()
 window.close()
+check("switching offers to back up the company being left",
+      BACKUP_ANSWERS, [made["Beta Trading"].name])
 
 print("\n7) A backup in the data folder is not a company")
 shutil.copyfile(made["Alpha Exports"],

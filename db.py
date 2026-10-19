@@ -450,6 +450,20 @@ def backup_source_digest(path: Path) -> str:
         conn.close()
 
 
+def backup_is_current(path=None) -> bool:
+    """True when the newest backup already holds exactly these books.
+
+    Lets a caller skip ASKING about a backup it knows would be deduped away:
+    offering to save work that is already saved, then writing nothing, reads
+    as a backup that failed.
+    """
+    source = Path(path or DB_PATH)
+    if not source.exists():
+        return False
+    newest = backups_for(source)
+    return bool(newest and backup_source_digest(newest[0]) == _digest(source))
+
+
 def prune_backups(path=None, keep: int = KEEP_BACKUPS) -> list[Path]:
     """Drop all but the newest ``keep`` backups of one company.
 

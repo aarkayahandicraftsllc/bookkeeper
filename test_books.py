@@ -512,12 +512,12 @@ conn.close()
 # Opening the app repeatedly without entering anything must not push the
 # useful copies out with identical ones.
 check("an unchanged book is not copied again",
-      db.backup_company(tag="open"), None)
+      db.backup_company(tag="close"), None)
 check("so the count is unchanged", len(db.backups_for()), len(before) + 1)
 
 post("Journal", 20, "something to change the books",
      ("Cash", 1.0, 0), ("Sales", 0, 1.0))
-second = db.backup_company(tag="open")
+second = db.backup_company(tag="close")
 check("a changed book IS copied again", second is not None, True)
 check("and the newest is the one just written", db.backups_for()[0], second)
 
@@ -553,7 +553,7 @@ mine = db.DATA_DIR / (Path(db.DB_PATH).stem + ".db")
 db.use_company(pinned)
 for _ in range(4):
     post("Journal", 21, "more", ("Cash", 1.0, 0), ("Sales", 0, 1.0))
-    db.backup_company(tag="open")
+    db.backup_company(tag="close")
 kept = db.prune_backups(keep=2)
 check("pruning drops the older copies", len(db.backups_for()), 2)
 check("it reports what it dropped", len(kept) > 0, True)
