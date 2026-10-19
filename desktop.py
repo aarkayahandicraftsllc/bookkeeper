@@ -7,10 +7,11 @@ are shared with the Streamlit version untouched, and both read the same
 ``data/books.db``, so you can use whichever suits the moment.
 
 Why a desktop build exists at all: voucher entry wants a grid that responds to
-every keystroke without a round trip, and function keys that switch voucher
-type the way Tally's do. Keyboard map follows Tally where it sensibly can:
+every keystroke without a round trip, and a key that switches voucher type
+without reaching for the mouse. Keyboard map:
 
-    F4 Contra   F5 Payment   F6 Receipt   F7 Journal   F8 Sales   F9 Purchase
+    Alt+Shift+P/R/C/J/S/U  Payment, Receipt, Contra, Journal, Sales, Purchase
+    Alt+L             create a ledger from the line you are on
     Ctrl+A            accept the voucher
     Ctrl+1..8         jump between screens (8 = Company details)
     Ctrl+S            save the company details, on that screen
@@ -45,10 +46,20 @@ import theme
 
 MONO = "Consolas, 'Courier New', monospace"
 
-# Tally's function keys for voucher types
+# Alt+Shift+<initial> picks the voucher type.
+#
+# Alt+SHIFT, not plain Alt, because the menu bar owns the plain Alt letters
+# (&Go &Voucher &Report &Company &Settings) and a menu-bar mnemonic beats a
+# shortcut - Receipt, Contra and Sales would all have opened a menu instead,
+# the same silent dead key that Alt+C was. Adding Shift sidesteps the menus
+# entirely, so every initial stays available.
+#
+# Purchase is the one exception to "the initial": Payment has P, so Purchase
+# takes the U of p-U-rchase.
 VOUCHER_KEYS = {
-    "F4": "Contra", "F5": "Payment", "F6": "Receipt",
-    "F7": "Journal", "F8": "Sales", "F9": "Purchase",
+    "Alt+Shift+P": "Payment", "Alt+Shift+R": "Receipt",
+    "Alt+Shift+C": "Contra", "Alt+Shift+J": "Journal",
+    "Alt+Shift+S": "Sales", "Alt+Shift+U": "Purchase",
 }
 
 
@@ -2376,7 +2387,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.company.changed.connect(self._company_changed)
 
         self._build_menu()
-        self.statusBar().showMessage("F4–F9 switch voucher type · Ctrl+A accepts")
+        self.statusBar().showMessage(
+            "Alt+Shift+P/R/C/J/S/U switch voucher type · Ctrl+A accepts")
         self.refresh_all()
         self.show_screen(0)
 

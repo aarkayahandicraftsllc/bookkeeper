@@ -72,11 +72,35 @@ check("screen names", [name.replace("&&", "&") for name, _ in window.screens],
 check("starts on voucher entry", window.stack.currentIndex(), 0)
 check("title names the company", "Bookkeeper" in window.windowTitle(), True)
 
-print("\n2) Tally's function keys switch voucher type")
+print("\n2) Alt+Shift+initial switches voucher type")
 for key, name in desktop.VOUCHER_KEYS.items():
     window._set_voucher_type(name)
     check(f"{key} selects {name}", window.voucher.type_box.currentText(), name)
 check("and it returns to voucher entry", window.stack.currentIndex(), 0)
+
+# Every type must be reachable, and no two may want the same keystroke.
+check("every voucher type has a key",
+      sorted(desktop.VOUCHER_KEYS.values()), sorted(db.VOUCHER_TYPES))
+check("and no key is used twice",
+      len(set(desktop.VOUCHER_KEYS)), len(desktop.VOUCHER_KEYS))
+
+# None of them may be a plain Alt+letter the menu bar already owns: that is
+# what made Alt+C a dead key. Shift is what keeps these clear of the menus.
+# Only TOP-LEVEL menus claim an Alt letter - findChildren() would also drag
+# in submenus like "&Text size", whose T is reachable only once Settings is
+# already open.
+menu_mnemonics = {a.menu().title().split("&")[1][0].upper()
+                  for a in window.menuBar().actions()
+                  if a.menu() and "&" in a.menu().title()}
+clashing = {key for key in desktop.VOUCHER_KEYS
+            if key.startswith("Alt+") and not key.startswith("Alt+Shift+")
+            and key.rsplit("+", 1)[1].upper() in menu_mnemonics}
+check("no voucher key collides with a menu mnemonic", clashing, set())
+check("the menus still own their own letters",
+      menu_mnemonics, {"G", "V", "R", "C", "S"})
+check("Qt parses every one of them",
+      [k for k in desktop.VOUCHER_KEYS
+       if QtGui.QKeySequence(k).toString() != k], [])
 
 print("\n3) Accept stays disabled until the voucher balances")
 voucher = window.voucher
@@ -1075,7 +1099,7 @@ check("and gives the number up",
 QtWidgets.QMessageBox.question = _real_question
 voucher.reset()
 
-print("\n24) The Alt+L shortcut actually fires")
+print("\n24) The shortcuts actually fire, pressed for real")
 # Binding a key is not the same as the key working, which is the whole lesson
 # of the Alt+C bug - so press it for real and see whether the action runs.
 # This goes LAST because a WidgetWithChildrenShortcut only fires inside an
@@ -1085,6 +1109,12 @@ print("\n24) The Alt+L shortcut actually fires")
 voucher = window.voucher
 window.show_screen(0)
 window.show()
+# The voucher-type keys are QActions with the default WindowShortcut context,
+# which fires only in an ACTIVE window - show() alone is not enough. (Alt+L
+# is WidgetWithChildrenShortcut, so focus is all that one needs, which is why
+# it passed without this.)
+window.activateWindow()
+window.raise_()
 app.processEvents()
 _real_create = voucher.create_ledger
 _fired = []
@@ -1099,6 +1129,39 @@ QTest.keyClick(voucher.grid, QtCore.Qt.Key_C, QtCore.Qt.AltModifier)
 app.processEvents()
 check("and Alt+C no longer does anything here", bool(_fired), False)
 voucher.create_ledger = _real_create
+
+# That Alt+C press did what it always did - it OPENED the Company menu - and
+# an open menu grabs the keyboard, so every shortcut tested after this point
+# would read as dead until it is dismissed.
+while QtWidgets.QApplication.activePopupWidget():
+    QtWidgets.QApplication.activePopupWidget().close()
+    app.processEvents()
+
+# Same for the voucher-type keys: they were only ever tested by calling the
+# method, so a dead keystroke would not have shown up there either.
+#
+# Use QTest.keySequence, NOT keyClick(key, modifiers): only the former
+# reliably routes a modified keystroke through Qt's shortcut map, so a
+# keyClick test reports every shortcut as dead whether it is or not.
+def press(sequence):
+    QTest.keySequence(window, QtGui.QKeySequence(sequence))
+    app.processEvents()
+
+for key, name in desktop.VOUCHER_KEYS.items():
+    window._set_voucher_type("Journal" if name != "Journal" else "Payment")
+    app.processEvents()
+    press(key)
+    check(f"pressing {key} really selects {name}",
+          voucher.type_box.currentText(), name)
+
+# And the plain-Alt version must NOT switch type, or it would be shadowing
+# a menu - Alt+P is free, but Alt+S/R/C belong to the menu bar.
+window._set_voucher_type("Journal")
+app.processEvents()
+press("Alt+P")
+check("plain Alt+P does not switch type",
+      voucher.type_box.currentText(), "Journal")
+
 window.hide()
 app.processEvents()
 

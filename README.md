@@ -13,16 +13,17 @@ modules, not in either interface.
 
 ## Why a desktop build
 
-Voucher entry wants a grid that reacts to every keystroke and function keys
-that switch voucher type. Streamlit reruns the whole script on each
-interaction, so the browser version is fine for reports but never feels like
-Tally for data entry. The desktop app is for entry; use either for reports.
+Voucher entry wants a grid that reacts to every keystroke and a key that
+switches voucher type without reaching for the mouse. Streamlit reruns the
+whole script on each interaction, so the browser version is fine for reports
+but never feels immediate enough for data entry. The desktop app is for
+entry; use either for reports.
 
 ### Keyboard
 
 | Key | Does |
 | --- | --- |
-| `F4` `F5` `F6` `F7` `F8` `F9` | Contra, Payment, Receipt, Journal, Sales, Purchase |
+| `Alt+Shift+P` `R` `C` `J` `S` `U` | Payment, Receipt, Contra, Journal, Sales, Purchase |
 | `Ctrl+A` | Accept the voucher |
 | `Ctrl+1` … `Ctrl+8` | Jump between screens (`Ctrl+8` is Company) |
 | `Ctrl+S` | Save the company details, on that screen |
@@ -36,6 +37,18 @@ Tally for data entry. The desktop app is for entry; use either for reports.
 | `Ctrl+E` | Export it to a spreadsheet or CSV |
 | `Ctrl+B` | Back up these books |
 | `Ctrl+=` / `Ctrl+-` | Text bigger / smaller |
+
+Voucher types are **Alt+Shift+initial**, not plain `Alt+initial` and not
+function keys.
+
+*Why Shift:* the menu bar owns the plain Alt letters — `&Go` `&Voucher`
+`&Report` `&Company` `&Settings` — and **a menu-bar mnemonic beats a
+shortcut**, so Receipt, Contra and Sales would each have opened a menu and
+never switched type. That is the same silent dead key `Alt+C` was. Shift
+sidesteps the menus, leaving every initial usable.
+
+*Why `U` for Purchase:* Payment already has `P`, so Purchase takes the `U`
+of p**u**rchase. No scheme can give both of them their initial.
 
 ## Text size
 
