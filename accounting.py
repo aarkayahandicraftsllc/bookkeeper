@@ -256,9 +256,12 @@ def ledger_statement(ledger_id: int, date_from=None, date_to=None) -> dict:
 # --------------------------------------------------------------------------- #
 def day_book(date_from=None, date_to=None) -> pd.DataFrame:
     """Every voucher in the period, one row per voucher, Tally's Day Book."""
-    lines = db.get_lines(date_from=date_from, date_to=date_to)
+    # Voided vouchers are asked for deliberately: they belong in the Day Book,
+    # holding their number, even though they post nothing.
+    lines = db.get_lines(date_from=date_from, date_to=date_to,
+                         include_voided=True)
     columns = ["Date", "Particulars", "Vch Type", "Vch No", "Debit", "Credit",
-               "voucher_id"]
+               "voided", "voucher_id"]
     if lines.empty:
         return pd.DataFrame(columns=columns)
 
@@ -267,13 +270,18 @@ def day_book(date_from=None, date_to=None) -> pd.DataFrame:
         debits = group[group["debit"] > 0]["ledger_name"].tolist()
         credits = group[group["credit"] > 0]["ledger_name"].tolist()
         head = group.iloc[0]
+        voided = bool(head.get("voided", 0))
         records.append({
             "Date": head["voucher_date"],
             "Particulars": " / ".join(debits) + "  ←  " + " / ".join(credits),
             "Vch Type": head["voucher_type"],
             "Vch No": int(head["number"]),
-            "Debit": round(float(group["debit"].sum()), 2),
-            "Credit": round(float(group["credit"].sum()), 2),
+            # Shown as nil, not as what it used to be - a voided voucher moves
+            # no value, so a Day Book that summed its old amounts would
+            # disagree with every other report.
+            "Debit": 0.0 if voided else round(float(group["debit"].sum()), 2),
+            "Credit": 0.0 if voided else round(float(group["credit"].sum()), 2),
+            "voided": voided,
             "voucher_id": int(voucher),
         })
     frame = pd.DataFrame(records, columns=columns)

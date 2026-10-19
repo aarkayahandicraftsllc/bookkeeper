@@ -426,14 +426,20 @@ with tab_daybook:
     if book.empty:
         st.info("No vouchers in this period.")
     else:
-        st.caption(f"{len(book)} voucher(s)")
+        voided_count = int(book["voided"].sum())
+        st.caption(f"{len(book)} voucher(s)"
+                   + (f", {voided_count} voided" if voided_count else ""))
+        # The column only appears when there is something to say, so an
+        # untouched book is not given an empty column to read past.
+        listed = book.drop(columns=["voucher_id", "voided"])
+        if voided_count:
+            listed["Status"] = ["Voided" if v else "" for v in book["voided"]]
         st.download_button(
             "⬇️ Day Book CSV",
-            data=book.drop(columns=["voucher_id"]).to_csv(index=False)
-                     .encode("utf-8-sig"),
+            data=listed.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"daybook_{date.today().isoformat()}.csv", mime="text/csv")
         chosen = st.dataframe(
-            book.drop(columns=["voucher_id"]), hide_index=True, width="stretch",
+            listed, hide_index=True, width="stretch",
             height=table_height(len(book), 20),
             on_select="rerun", selection_mode="single-row",
             column_config={
@@ -451,16 +457,55 @@ with tab_daybook:
             record = db.get_voucher(voucher_id)
             if record:
                 head, lines = record
+                voided = bool(head.get("voided", 0))
                 st.divider()
-                st.subheader(f"{head['voucher_type']} voucher no. {head['number']}")
-                voucher_editor(f"edit{voucher_id}", head, lines)
-                if st.checkbox("I want to delete this voucher",
-                               key=f"delchk_{voucher_id}"):
-                    if st.button("🗑️ Delete voucher", key=f"del_{voucher_id}"):
+                st.subheader(
+                    f"{head['voucher_type']} voucher no. {head['number']}"
+                    + ("  ·  voided" if voided else ""))
+
+                # These sit ABOVE the editor, with the voucher's own heading.
+                # Below the grid they were off-screen and went unfound.
+                act1, act2, _ = st.columns([1, 1, 3])
+                if voided:
+                    if act1.button("↩️ Restore voucher",
+                                   key=f"restore_{voucher_id}",
+                                   width="stretch"):
+                        db.restore_voucher(voucher_id)
+                        flash(f"{head['voucher_type']} no. {head['number']} "
+                              "restored — it counts in the books again.")
+                        st.rerun()
+                else:
+                    if act1.button("🚫 Void voucher", key=f"void_{voucher_id}",
+                                   width="stretch"):
+                        db.void_voucher(voucher_id)
+                        flash(f"{head['voucher_type']} no. {head['number']} "
+                              "voided — it keeps its number but posts nothing.")
+                        st.rerun()
+                with act2.popover("🗑️ Delete…", width="stretch"):
+                    st.warning(
+                        f"Delete {head['voucher_type']} no. {head['number']} "
+                        "for good? This cannot be undone, and the number is "
+                        "given up — if it was not the last of its type it "
+                        "leaves a permanent gap. To annul it but keep the "
+                        "number, void it instead."
+                    )
+                    if st.button("Delete for good", key=f"del_{voucher_id}",
+                                 type="primary"):
                         db.delete_voucher(voucher_id)
                         flash(f"Voucher {head['voucher_type']} no. "
-                              f"{head['number']} deleted.")
+                              f"{head['number']} deleted — its number has "
+                              "been given up.")
                         st.rerun()
+
+                if voided:
+                    st.info(
+                        "This voucher is voided. It keeps its number and stays "
+                        "in the Day Book, but posts nothing to the books and is "
+                        "left out of every report. It cannot be edited until "
+                        "you restore it."
+                    )
+                else:
+                    voucher_editor(f"edit{voucher_id}", head, lines)
 
 # --------------------------------------------------------------------------- #
 with tab_ledger:

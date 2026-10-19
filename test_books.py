@@ -630,5 +630,121 @@ check("an old voucher brings its year into the list",
 check("and the years between it and now are unbroken",
       labels, ["2023-2024", "2024-2025", "2025-2026", "2026-2027"])
 
+print("\n18) Voiding a voucher: it stops counting but keeps its number")
+# A fresh pair of ledgers, so these checks do not have to reason about
+# everything posted above.
+db.add_ledger("Void Test Expense", "Indirect Expenses")
+db.add_ledger("Void Test Bank", "Bank Accounts")
+before_gap = acc.trial_balance()["difference"]
+net_before = acc.net_profit()
+vid = db.save_voucher(
+    voucher_type="Payment", voucher_date=date(2026, 4, 20),
+    narration="To be voided",
+    lines=[{"ledger_id": db.ledger_id("Void Test Expense"), "debit": 7_500,
+            "credit": 0},
+           {"ledger_id": db.ledger_id("Void Test Bank"), "debit": 0,
+            "credit": 7_500}])
+numbered = int(db.get_voucher(vid)[0]["number"])
+balances = acc.balances().set_index("ledger")
+check("the voucher posts while it is live",
+      float(balances.loc["Void Test Expense", "closing"]), 7_500.0)
+next_before = db.next_voucher_number("Payment")
+
+db.void_voucher(vid)
+check("it reads back as voided", db.is_voided(vid), True)
+balances = acc.balances().set_index("ledger")
+check("the expense is back to nil",
+      float(balances.loc["Void Test Expense", "closing"]), 0.0)
+check("and so is the bank",
+      float(balances.loc["Void Test Bank", "closing"]), 0.0)
+check("it is gone from the lines the reports read",
+      vid in set(db.get_lines()["voucher_id"]), False)
+check("but the lines are still THERE, not erased",
+      vid in set(db.get_lines(include_voided=True)["voucher_id"]), True)
+check("the trial balance is undisturbed",
+      acc.trial_balance()["difference"], before_gap, tol=0.0)
+check("the balance sheet still balances",
+      acc.balance_sheet()["totals"]["difference"], 0.0, tol=0.0)
+check("it is off the face of the P&L",
+      "Void Test Expense" in
+      set(acc.profit_and_loss()["indirect_expense"]["Particulars"]), False)
+check("and the net profit is exactly what it was before the voucher",
+      acc.net_profit(), net_before, tol=0.0)
+
+# The point of voiding rather than deleting: the number stays spent.
+check("its number is NOT handed to the next voucher",
+      db.next_voucher_number("Payment"), next_before)
+book = acc.day_book()
+row = book[book["voucher_id"] == vid]
+check("it is still listed in the Day Book", len(row), 1)
+check("holding its number", int(row.iloc[0]["Vch No"]), numbered)
+check("marked as voided", bool(row.iloc[0]["voided"]), True)
+check("and showing nil, not what it used to be",
+      float(row.iloc[0]["Debit"]), 0.0)
+check("the Day Book's own total ignores it",
+      float(book["Debit"].sum()), float(book[~book["voided"]]["Debit"].sum()))
+
+print("\n19) A voided voucher is frozen until it is restored")
+try:
+    db.save_voucher(voucher_id=vid, voucher_type="Payment",
+                    voucher_date=date(2026, 4, 20), narration="sneaky edit",
+                    lines=[{"ledger_id": db.ledger_id("Void Test Expense"),
+                            "debit": 1, "credit": 0},
+                           {"ledger_id": db.ledger_id("Void Test Bank"),
+                            "debit": 0, "credit": 1}])
+    check("editing a voided voucher is refused", "allowed", "refused")
+except ValueError as exc:
+    check("editing a voided voucher is refused", "refused", "refused")
+    check("and says to restore it first", "restore" in str(exc).lower(), True)
+check("so its lines are untouched",
+      float(db.get_lines(include_voided=True)
+            .query("voucher_id == @vid")["debit"].sum()), 7_500.0)
+
+db.restore_voucher(vid)
+check("restoring brings it back", db.is_voided(vid), False)
+check("with its amounts intact",
+      float(acc.balances().set_index("ledger")
+            .loc["Void Test Expense", "closing"]), 7_500.0)
+check("and the books still balance",
+      acc.trial_balance()["difference"], before_gap, tol=0.0)
+
+print("\n20) An older book gains the column it was made without")
+# Books created before voiding existed have no `voided` column, and
+# CREATE TABLE IF NOT EXISTS will not add one. Simulate that exactly.
+legacy = Path(tempfile.gettempdir()) / "bookkeeper_legacy.db"
+legacy.unlink(missing_ok=True)
+import sqlite3  # noqa: E402
+from contextlib import closing  # noqa: E402
+
+# `with sqlite3.connect(...)` opens a TRANSACTION, it does not close the
+# connection - so without closing() the file stays locked and Windows
+# refuses to delete it at the end.
+def legacy_sql(*statements):
+    with closing(sqlite3.connect(legacy)) as old, old:
+        return [old.execute(sql).fetchall() for sql in statements]
+
+with closing(sqlite3.connect(legacy)) as old, old:
+    old.executescript(db.SCHEMA)
+legacy_sql("ALTER TABLE vouchers DROP COLUMN voided",
+           "ALTER TABLE vouchers DROP COLUMN voided_at",
+           "INSERT INTO vouchers (voucher_type, number, voucher_date,"
+           " narration, created_at) VALUES ('Journal', 1, '2026-04-01',"
+           " 'legacy', '2026-04-01')")
+columns = {r[1] for r in legacy_sql("PRAGMA table_info(vouchers)")[0]}
+check("the legacy book really lacks it", "voided" in columns, False)
+
+kept = db.DB_PATH
+db.use_company(legacy)
+db.init_db()
+columns, rows = legacy_sql("PRAGMA table_info(vouchers)",
+                           "SELECT voided FROM vouchers")
+columns = {r[1] for r in columns}
+check("opening it adds the column", "voided" in columns, True)
+check("and every existing voucher is live, not voided",
+      [r[0] for r in rows], [0])
+check("init_db can be run again safely", db.init_db(), None)
+db.use_company(kept)
+legacy.unlink(missing_ok=True)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAILURES else f"FAILURES: {FAILURES}"))
 raise SystemExit(1 if FAILURES else 0)

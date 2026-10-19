@@ -738,6 +738,7 @@ class VoucherScreen(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.editing_id: int | None = None
+        self.editing_voided = False
         layout = QtWidgets.QVBoxLayout(self)
 
         self.title = heading("Voucher Entry")
@@ -812,6 +813,20 @@ class VoucherScreen(QtWidgets.QWidget):
         self.accept_button.setDefault(True)
         self.accept_button.clicked.connect(self.accept_voucher)
         bottom = QtWidgets.QHBoxLayout()
+        # The two destructive actions sit at the far LEFT, a whole stretch away
+        # from Accept, so neither is ever the button next to the one you meant.
+        self.delete_button = QtWidgets.QPushButton("Delete voucher")
+        self.delete_button.clicked.connect(self.delete_voucher)
+        self.delete_button.setVisible(False)
+        bottom.addWidget(self.delete_button)
+        self.void_button = QtWidgets.QPushButton("Void voucher")
+        self.void_button.clicked.connect(self.void_voucher)
+        self.void_button.setVisible(False)
+        bottom.addWidget(self.void_button)
+        self.restore_button = QtWidgets.QPushButton("Restore voucher")
+        self.restore_button.clicked.connect(self.restore_voucher)
+        self.restore_button.setVisible(False)
+        bottom.addWidget(self.restore_button)
         bottom.addStretch(1)
         self.cancel_button = QtWidgets.QPushButton("Cancel edit")
         self.cancel_button.clicked.connect(self.reset)
@@ -894,11 +909,21 @@ class VoucherScreen(QtWidgets.QWidget):
 
         balanced = abs(gap) <= 0.005 and debit > 0 and len(rows) >= 2
         distinct = len({r["ledger_id"] for r in rows}) >= 2
-        self.accept_button.setEnabled(balanced and distinct)
+        # This runs on every keystroke, so the voided freeze has to be applied
+        # HERE as well as on load - otherwise typing in the grid hands Accept
+        # back and the data layer would then refuse the save.
+        self.accept_button.setEnabled(balanced and distinct
+                                      and not self.editing_voided)
 
         notes = db.voucher_type_warnings(
             self.type_box.currentText(), rows, self._ledgers)
-        if not rows:
+        if self.editing_voided:
+            self.notice.setText(
+                "This voucher is voided. It keeps its number but posts nothing "
+                "to the books, so it is left out of every report. Restore it "
+                "to make it count again, or delete it to give up its number.")
+            tone(self.notice, "warn")
+        elif not rows:
             self.notice.setText(
                 "Pick a ledger on each line, then put the amount under Debit or "
                 "Credit — never both on one line.")
@@ -985,8 +1010,13 @@ class VoucherScreen(QtWidgets.QWidget):
         self._loading = True
         self.reload_ledgers()
         self.editing_id = None
+        self.editing_voided = False
         self.title.setText("Voucher Entry")
         self.cancel_button.setVisible(False)
+        self.delete_button.setVisible(False)
+        self.void_button.setVisible(False)
+        self.restore_button.setVisible(False)
+        self.accept_button.setEnabled(True)
         self.narration.clear()
         self.date_edit.setDate(to_qdate(date.today()))
         self.grid.setRowCount(0)
@@ -1003,9 +1033,18 @@ class VoucherScreen(QtWidgets.QWidget):
         self._loading = True
         self.reload_ledgers()
         self.editing_id = int(head["id"])
+        self.editing_voided = bool(head.get("voided", 0))
         self.title.setText(
-            f"Altering {head['voucher_type']} voucher no. {head['number']}")
+            (f"Voided {head['voucher_type']} voucher no. {head['number']}"
+             if self.editing_voided else
+             f"Altering {head['voucher_type']} voucher no. {head['number']}"))
         self.cancel_button.setVisible(True)
+        self.delete_button.setVisible(True)
+        # A voided voucher offers Restore instead of Void, and cannot be
+        # accepted - it is a record of what was annulled, not a draft.
+        self.void_button.setVisible(not self.editing_voided)
+        self.restore_button.setVisible(self.editing_voided)
+        self.accept_button.setEnabled(not self.editing_voided)
         self.type_box.setCurrentText(str(head["voucher_type"]))
         self.date_edit.setDate(to_qdate(str(head["voucher_date"])))
         self.narration.setText(str(head["narration"]))
@@ -1016,6 +1055,92 @@ class VoucherScreen(QtWidgets.QWidget):
             self._add_row(str(line["ledger_name"]), float(line["debit"]),
                           float(line["credit"]))
         self._recalculate()
+
+    def _voucher_label(self) -> str:
+        head = self.title.text()
+        return head.split(" ", 1)[1] if " " in head else "this voucher"
+
+    def _finish(self, message: str) -> None:
+        """Leave the editor and tell the rest of the app the books moved."""
+        self.reset()
+        self.posted.emit()
+        window = self.window()
+        if isinstance(window, QtWidgets.QMainWindow):
+            window.statusBar().showMessage(message, 6000)
+
+    def void_voucher(self) -> None:
+        if self.editing_id is None:
+            return
+        confirm = QtWidgets.QMessageBox.question(
+            self, "Void this voucher?",
+            f"Void {self._voucher_label()}?\n\n"
+            "It keeps its number and stays in the Day Book, but posts nothing "
+            "to the books and drops out of every report. You can restore it "
+            "later.",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No)
+        if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        try:
+            db.void_voucher(self.editing_id)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Cannot void", str(exc))
+            return
+        self._finish("Voucher voided — it keeps its number but posts nothing.")
+
+    def restore_voucher(self) -> None:
+        if self.editing_id is None:
+            return
+        try:
+            db.restore_voucher(self.editing_id)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Cannot restore", str(exc))
+            return
+        self._finish("Voucher restored — it counts in the books again.")
+
+    def _ask_delete(self) -> str:
+        """Put the three ways out of a delete, and report which was chosen.
+
+        Kept apart from `delete_voucher` so the decision can be driven in a
+        test: `clickedButton()` is set by a real click and cannot be faked.
+        Returns "delete", "void" or "keep".
+        """
+        # Deleting is the one action with nothing behind it, so it says so and
+        # defaults to keeping. Void is offered again right here, because most
+        # of the time it is what was actually wanted.
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Delete this voucher?")
+        box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        box.setText(f"Delete {self._voucher_label()} for good?")
+        box.setInformativeText(
+            "This cannot be undone. Voucher number "
+            f"{self.number_label.text().removeprefix('No. ')} is given up — if "
+            "it was not the last of its type, it leaves a permanent gap in the "
+            "series.\n\nIf you only want to annul it, void it instead — that "
+            "keeps the number and can be undone.")
+        delete = box.addButton("Delete for good",
+                               QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+        void = box.addButton("Void instead",
+                             QtWidgets.QMessageBox.ButtonRole.ActionRole)
+        keep = box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(keep)
+        box.exec()
+        clicked = box.clickedButton()
+        return "delete" if clicked is delete else \
+               "void" if clicked is void else "keep"
+
+    def delete_voucher(self) -> None:
+        if self.editing_id is None:
+            return
+        choice = self._ask_delete()
+        if choice == "void":
+            self.void_voucher()
+            return
+        if choice != "delete":
+            return
+        db.delete_voucher(self.editing_id)
+        self._finish("Voucher deleted — its number has been given up.")
 
     def accept_voucher(self) -> None:
         rows = self.row_values()
@@ -1347,10 +1472,20 @@ class DayBookScreen(QtWidgets.QWidget):
         if kind != "All" and not frame.empty:
             frame = frame[frame["Vch Type"] == kind]
         self._frame = frame.reset_index(drop=True)
-        self.count.setText(f"{len(self._frame)} voucher(s)")
-        shown = self._frame.drop(columns=["voucher_id"]) if not frame.empty \
-            else pd.DataFrame(columns=["Date", "Particulars", "Vch Type",
-                                       "Vch No", "Debit", "Credit"])
+        voided = int(self._frame["voided"].sum()) if not frame.empty else 0
+        self.count.setText(f"{len(self._frame)} voucher(s)"
+                           + (f", {voided} voided" if voided else ""))
+        if frame.empty:
+            shown = pd.DataFrame(columns=["Date", "Particulars", "Vch Type",
+                                          "Vch No", "Debit", "Credit"])
+        else:
+            shown = self._frame.drop(columns=["voucher_id", "voided"])
+            # The column only appears when there is something to say, so an
+            # untouched book is not given an empty column to read past.
+            if voided:
+                shown.insert(len(shown.columns), "Status",
+                             ["Voided" if v else ""
+                              for v in self._frame["voided"]])
         # Kept for print and export: what is on SCREEN, without the voucher
         # id the table hides and no reader of a report wants to see.
         self._shown = shown

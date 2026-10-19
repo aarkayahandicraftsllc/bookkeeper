@@ -118,6 +118,8 @@ CREATE TABLE IF NOT EXISTS vouchers (
     voucher_date TEXT    NOT NULL,
     narration    TEXT    NOT NULL DEFAULT '',
     created_at   TEXT    NOT NULL,
+    voided       INTEGER NOT NULL DEFAULT 0,
+    voided_at    TEXT    NOT NULL DEFAULT '',
     UNIQUE (voucher_type, number)
 );
 
@@ -674,10 +676,28 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _migrate(conn) -> None:
+    """Add columns that later versions introduced.
+
+    `CREATE TABLE IF NOT EXISTS` leaves an existing table exactly as it was,
+    so books created before a column existed need it added in place. Each
+    step must be safe to run on a database that already has it.
+    """
+    columns = {row["name"] for row in
+               conn.execute("PRAGMA table_info(vouchers)").fetchall()}
+    if "voided" not in columns:
+        conn.execute("ALTER TABLE vouchers ADD COLUMN voided INTEGER NOT NULL"
+                     " DEFAULT 0")
+    if "voided_at" not in columns:
+        conn.execute("ALTER TABLE vouchers ADD COLUMN voided_at TEXT NOT NULL"
+                     " DEFAULT ''")
+
+
 def init_db() -> None:
     """Create the schema and the reserved masters. Safe to call repeatedly."""
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
         if conn.execute("SELECT COUNT(*) FROM groups").fetchone()[0] == 0:
             ids: dict[str, int] = {}
@@ -1010,6 +1030,12 @@ def save_voucher(*, voucher_type: str, voucher_date, narration: str,
     """Post a voucher. Refuses anything that does not balance."""
     if voucher_type not in VOUCHER_TYPES:
         raise ValueError(f"Unknown voucher type {voucher_type!r}")
+    if voucher_id is not None and is_voided(voucher_id):
+        # A voided voucher is a record of what was annulled. Editing one would
+        # quietly rewrite history that the books have already set aside.
+        raise ValueError(
+            "This voucher is voided and cannot be altered. Restore it first "
+            "if you want to change it.")
     cleaned = _validate_lines(lines, get_ledgers(include_inactive=True))
     date_str = (voucher_date.isoformat() if hasattr(voucher_date, "isoformat")
                 else str(voucher_date))
@@ -1058,19 +1084,30 @@ def get_vouchers(date_from=None, date_to=None,
         return pd.read_sql_query(sql, conn, params=params)
 
 
-def get_lines(date_from=None, date_to=None) -> pd.DataFrame:
-    """Every voucher line in the period, joined to its voucher and ledger."""
+def get_lines(date_from=None, date_to=None,
+              include_voided: bool = False) -> pd.DataFrame:
+    """Every voucher line in the period, joined to its voucher and ledger.
+
+    Voided vouchers are LEFT OUT by default. This is the one place the whole
+    accounting layer reads lines from, so excluding them here is what keeps
+    them out of every balance, the trial balance, both statements and the
+    ledger without a word of report code knowing about voiding. The Day Book
+    passes `include_voided=True` on purpose: a voided voucher must stay
+    visible, holding its number, which is the entire point of voiding it.
+    """
     sql = (
         "SELECT vl.id, vl.voucher_id, vl.ledger_id, vl.debit, vl.credit,"
         " vl.line_order, v.voucher_type, v.number, v.voucher_date, v.narration,"
-        " l.name AS ledger_name, g.name AS group_name, g.nature, g.affects_gross,"
-        " l.group_id"
+        " v.voided, l.name AS ledger_name, g.name AS group_name, g.nature,"
+        " g.affects_gross, l.group_id"
         " FROM voucher_lines vl"
         " JOIN vouchers v ON v.id = vl.voucher_id"
         " JOIN ledgers l ON l.id = vl.ledger_id"
         " JOIN groups g ON g.id = l.group_id WHERE 1 = 1"
     )
     params: list = []
+    if not include_voided:
+        sql += " AND v.voided = 0"
     if date_from is not None:
         sql += " AND v.voucher_date >= ?"
         params.append(str(date_from))
@@ -1101,7 +1138,41 @@ def get_voucher(voucher_id: int) -> tuple[dict, list[dict]] | None:
 
 
 def delete_voucher(voucher_id: int) -> None:
+    """Remove a voucher outright. Its number is given up and leaves a gap."""
     with connect() as conn:
         conn.execute("DELETE FROM voucher_lines WHERE voucher_id = ?",
                      (int(voucher_id),))
         conn.execute("DELETE FROM vouchers WHERE id = ?", (int(voucher_id),))
+
+
+def is_voided(voucher_id: int) -> bool:
+    with connect() as conn:
+        row = conn.execute("SELECT voided FROM vouchers WHERE id = ?",
+                           (int(voucher_id),)).fetchone()
+    return bool(row and row["voided"])
+
+
+def void_voucher(voucher_id: int) -> None:
+    """Annul a voucher while KEEPING its number and its lines.
+
+    The voucher stops affecting the books the moment this is set, because
+    `get_lines()` leaves voided vouchers out. Nothing is erased: the lines
+    stay so the Day Book can still show what the voucher was, and the number
+    stays occupied so the series has no gap. `restore_voucher` undoes it.
+    """
+    with connect() as conn:
+        if conn.execute("SELECT id FROM vouchers WHERE id = ?",
+                        (int(voucher_id),)).fetchone() is None:
+            raise ValueError("That voucher no longer exists.")
+        conn.execute("UPDATE vouchers SET voided = 1, voided_at = ?"
+                     " WHERE id = ?", (_now(), int(voucher_id)))
+
+
+def restore_voucher(voucher_id: int) -> None:
+    """Bring a voided voucher back into the books, unchanged."""
+    with connect() as conn:
+        if conn.execute("SELECT id FROM vouchers WHERE id = ?",
+                        (int(voucher_id),)).fetchone() is None:
+            raise ValueError("That voucher no longer exists.")
+        conn.execute("UPDATE vouchers SET voided = 0, voided_at = ''"
+                     " WHERE id = ?", (int(voucher_id),))

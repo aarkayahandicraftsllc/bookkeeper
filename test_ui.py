@@ -181,4 +181,32 @@ assert "PAN" in errors, errors or "no error shown"
 assert db.get_company()["gstin"] == "09AAAPZ1234C1Z5", "a bad GSTIN was stored"
 print("PASS  a GSTIN not carrying the PAN is refused, and nothing is stored")
 
+print("\n10) A voided voucher in the web app")
+# The Void / Restore / Delete buttons sit behind a dataframe row selection,
+# which AppTest cannot click, so what is checked here is that a book
+# CONTAINING a voided voucher renders and reports correctly.
+victim = int(acc.day_book().iloc[0]["voucher_id"])
+net_live = acc.net_profit()
+db.void_voucher(victim)
+at = fresh()
+assert not at.exception, at.exception
+print("PASS  the app renders with a voided voucher in the books")
+
+book = acc.day_book()
+row = book[book["voucher_id"] == victim]
+assert len(row) == 1, "the voided voucher vanished from the Day Book"
+assert bool(row.iloc[0]["voided"]), row
+assert float(row.iloc[0]["Debit"]) == 0.0, row
+print("PASS  it is still listed, marked voided, showing nil")
+
+assert acc.net_profit() != net_live, "voiding changed nothing in the reports"
+assert acc.balance_sheet()["totals"]["difference"] == 0.0, "sheet unbalanced"
+print("PASS  it is out of the reports, and the balance sheet still balances")
+
+db.restore_voucher(victim)
+assert acc.net_profit() == net_live, "restoring did not put it back"
+at = fresh()
+assert not at.exception, at.exception
+print("PASS  restoring puts it back, and the app still renders")
+
 print("\nALL UI CHECKS PASSED")

@@ -979,6 +979,83 @@ check("and opens nothing", _launched, [])
 QtWidgets.QFileDialog.getSaveFileName = _real_dialog
 QtGui.QDesktopServices.openUrl = _real_open
 
+print("\n23) Voiding, restoring and deleting a voucher")
+db.use_company(TMP)
+voucher = window.voucher
+vid = db.save_voucher(
+    voucher_type="Journal", voucher_date=date.today(), narration="to void",
+    lines=[{"ledger_id": db.ledger_id("Rent"), "debit": 4_000, "credit": 0},
+           {"ledger_id": db.ledger_id("Bank"), "debit": 0, "credit": 4_000}])
+
+voucher.load_voucher(vid)
+check("altering offers Void", voucher.void_button.isHidden(), False)
+check("and Delete", voucher.delete_button.isHidden(), False)
+check("but not Restore", voucher.restore_button.isHidden(), True)
+check("the title says Altering", "Altering" in voucher.title.text(), True)
+
+# Say yes to the confirmation, without a dialog to click.
+_real_question = QtWidgets.QMessageBox.question
+QtWidgets.QMessageBox.question = staticmethod(
+    lambda *a, **k: QtWidgets.QMessageBox.StandardButton.Yes)
+voucher.void_voucher()
+check("the voucher is voided", db.is_voided(vid), True)
+check("and the editor was left", voucher.editing_id, None)
+
+voucher.load_voucher(vid)
+check("reopening says Voided", "Voided" in voucher.title.text(), True)
+check("Restore is offered instead", voucher.restore_button.isHidden(), False)
+check("Void is not", voucher.void_button.isHidden(), True)
+check("Accept is refused", voucher.accept_button.isEnabled(), False)
+check("and the notice explains why",
+      "voided" in voucher.notice.text().lower(), True)
+# The trap: _recalculate runs on every keystroke and used to hand Accept back.
+set_row(voucher, 0, "Rent", debit=4_000)
+check("typing in the grid does NOT re-enable Accept",
+      voucher.accept_button.isEnabled(), False)
+
+window.refresh_all()
+book = window.daybook._shown
+check("the Day Book gained a Status column", "Status" in book.columns, True)
+check("the voided voucher is marked",
+      "Voided" in list(book["Status"]), True)
+check("showing nil", float(book[book["Status"] == "Voided"]["Debit"].iloc[0]),
+      0.0)
+check("and the count says how many", "1 voided" in window.daybook.count.text(),
+      True)
+check("a voided voucher prints with the rest",
+      "Status" in window.daybook.report().sections[0].frame.columns, True)
+
+voucher.load_voucher(vid)
+voucher.restore_voucher()
+check("restoring puts it back", db.is_voided(vid), False)
+voucher.load_voucher(vid)
+check("and Accept works again", voucher.accept_button.isEnabled(), True)
+window.refresh_all()
+check("the Status column goes away again",
+      "Status" in window.daybook._shown.columns, False)
+
+# "Void instead" on the delete dialog must void, not delete.
+voucher.load_voucher(vid)
+voucher._ask_delete = lambda: "void"
+voucher.delete_voucher()
+check("choosing Void instead voids", db.is_voided(vid), True)
+check("and keeps the voucher", db.get_voucher(vid) is None, False)
+
+voucher.load_voucher(vid)
+voucher._ask_delete = lambda: "keep"
+voucher.delete_voucher()
+check("backing out of the delete keeps it", db.get_voucher(vid) is None, False)
+
+number_before = db.next_voucher_number("Journal")
+voucher.load_voucher(vid)
+voucher._ask_delete = lambda: "delete"
+voucher.delete_voucher()
+check("deleting for good removes it", db.get_voucher(vid) is None, True)
+check("and gives the number up",
+      db.next_voucher_number("Journal"), number_before - 1)
+QtWidgets.QMessageBox.question = _real_question
+voucher.reset()
+
 # The real data folder must be untouched by any of this.
 check("the suite wrote only into its sandbox",
       str(db.DATA_DIR).startswith(str(Path(tempfile.gettempdir()))), True)

@@ -433,6 +433,39 @@ credit cash or bank, a Receipt should debit it, a Contra should be between two
 of them, a Journal should touch neither. You get told, not blocked, because
 real books occasionally need the exception.
 
+## Voiding a voucher, and deleting one
+
+Two different things, and the difference is the voucher **number**.
+
+**Void** annuls a voucher but keeps it. It holds its number, stays listed in
+the Day Book marked `Voided`, and keeps its lines — but it posts nothing, so
+it drops out of every balance, the trial balance, both statements and the
+ledger. Use it when an entry should not count but its number must stay spent:
+that is what keeps an invoice series unbroken, which matters because a gap in
+a sales invoice series is not allowed under GST. A voided voucher is **frozen**
+— it cannot be edited, because it is a record of what was annulled rather than
+a draft. **Restore** brings it back unchanged.
+
+**Delete** removes the voucher outright and gives up its number. If it was the
+last of its type the number is handed to the next voucher; otherwise it leaves
+a permanent gap. Nothing is kept and it cannot be undone, so the confirmation
+says so and offers to void instead.
+
+Both live on the voucher itself: in the desktop app, open a voucher from the
+Day Book or a ledger and the buttons are at the bottom left, a deliberate
+distance from Accept. In the browser version, select the voucher's row in the
+Day Book and they sit beside its heading.
+
+How this stays correct across every report: the whole accounting layer reads
+voucher lines through the single `db.get_lines()`, which leaves voided
+vouchers out unless asked. So no report code knows that voiding exists. The
+Day Book is the one caller that passes `include_voided=True`, on purpose,
+and shows those rows as nil.
+
+Books made before this feature existed gain the column when they are next
+opened — `db._migrate()` adds it, because `CREATE TABLE IF NOT EXISTS` leaves
+an existing table alone.
+
 ## Difference in opening balances
 
 Because every voucher balances, the sum of all closing balances always equals
@@ -495,12 +528,17 @@ company into your real `data/` directory.
 `test_books.py` works a full set of books by hand — opening balances, a credit
 sale part received, a credit purchase part paid, a contra, bank interest — and
 asserts the trial balance and balance sheet differences are exactly `0.0` with
-no tolerance, including after edits, deletes and custom sub-groups.
+no tolerance, including after edits, deletes, voids and custom sub-groups. For
+voiding it checks both halves of the bargain: that the voucher leaves every
+report, and that its number is *not* handed on to the next one. It also builds
+a database without the `voided` column and opens it, to prove an older book is
+migrated rather than broken.
 
 `test_desktop.py` drives the real Qt widgets with the offscreen platform, so
 the desktop build is tested rather than only eyeballed: function keys, the
 disabled Accept button, the balance check, the voucher-type advice, posting,
-altering from the Day Book, and creating masters.
+altering from the Day Book, voiding and restoring, the three ways out of the
+delete confirmation, and creating masters.
 
 What a screen LOOKS like is the one thing these cannot assert. `screenshot.py`
 renders the real screens to PNGs in `shots/`, so a change to any of them can be
