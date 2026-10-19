@@ -203,10 +203,15 @@ Cancel calls the close off altogether — including a company switch (`F3`),
 which gets there by closing the window, so cancelling means staying on these
 books.
 
-**The offer is skipped when nothing has changed** since the newest backup
-(`db.backup_is_current`). Otherwise *Back up and close* would raise a dialog
-whose Yes writes nothing, because identical books are deduped away — and a
-backup that silently did nothing is worse than no offer at all.
+**When nothing has changed** since the newest backup it says so — *"These
+books are already backed up: the copy taken at 10:56 is identical…"* — with
+*Close* and *Cancel*. There is always a dialog.
+
+> An earlier version **skipped** the dialog in that case, reasoning that a Yes
+> which then wrote nothing (identical books are deduped away) would read as a
+> failed backup. That was wrong: closing in silence reads exactly the same
+> way, and was reported as the backup not working at all. Say what is true
+> instead — there is a copy, it matches, nothing needs writing.
 
 > **What this does not cover.** A close-time backup needs a clean exit. It does
 > **not** run if the app crashes, is killed from Task Manager, or the machine

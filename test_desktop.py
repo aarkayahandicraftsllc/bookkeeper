@@ -816,14 +816,21 @@ check("and calls off a company switch with it",
       window.switch_requested, False)
 check("still writing nothing", len(db.backups_for()), 1)
 
-# The prompt is SKIPPED when there is nothing new to save, so Yes can never
-# appear to have written a copy that was then deduped away.
+# Which of the two dialogs closing raises is decided by this, and only this.
+# The dialogs themselves cannot be driven headlessly - clickedButton() is set
+# by a real click - so what is pinned here is the branch, plus the closeEvent
+# behaviour above for each answer.
+#
+# Note it does NOT short-circuit to "no": an earlier version skipped the
+# dialog entirely when there was nothing to save, and closing in silence was
+# reported as the backup not working at all.
 desktop.MainWindow.ask_backup_on_close = _real_ask
 db.backup_company(window.company_file, tag="manual")
-check("with the books already backed up, closing does not ask",
-      window.ask_backup_on_close(), "no")
-check("because the newest backup already holds them",
+check("with the books already backed up, that is what closing will say",
       db.backup_is_current(window.company_file), True)
+check("and the backup can say when it was taken",
+      bool(db.peek_settings(db.backups_for(window.company_file)[0],
+                            (db.TAKEN_KEY,)).get(db.TAKEN_KEY)), True)
 for stale in db.backups_for():
     stale.unlink()
 check("with no backup at all there IS something to ask about",

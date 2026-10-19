@@ -2780,12 +2780,35 @@ class MainWindow(QtWidgets.QMainWindow):
 
         Kept apart from `closeEvent` so the decision can be driven in a test.
         """
-        # Nothing new to save: asking would only produce a dialog whose Yes
-        # writes nothing, because backup_company dedups on the source hash.
-        if db.backup_is_current(self.company_file):
-            return "no"
-
         leaving = "switching" if self.switch_requested else "closing"
+
+        # Already safe: say so rather than SKIPPING the dialog. An earlier
+        # version returned "no" silently here, on the reasoning that a Yes
+        # which then wrote nothing would read as a failed backup. But closing
+        # with no dialog at all reads exactly the same way, and worse, like
+        # the feature is broken - which is how it was reported. Say what is
+        # true instead: there is a copy, it matches, nothing needs writing.
+        if db.backup_is_current(self.company_file):
+            when = db.peek_settings(
+                db.backups_for(self.company_file)[0], (db.TAKEN_KEY,)
+            ).get(db.TAKEN_KEY, "")
+            box = QtWidgets.QMessageBox(self)
+            box.setWindowTitle("Already backed up")
+            box.setIcon(QtWidgets.QMessageBox.Icon.Information)
+            box.setText("These books are already backed up.")
+            box.setInformativeText(
+                (f"The copy taken at {when.replace('T', ' ')} is identical to "
+                 if when else "The newest backup is identical to ")
+                + f"{self.company_file.name} as it stands, so there is "
+                f"nothing new to save.\n\nBackups are in {db.backup_dir()}.")
+            close = box.addButton(
+                "Switch" if self.switch_requested else "Close",
+                QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(close)
+            box.exec()
+            return "no" if box.clickedButton() is close else "cancel"
+
         box = QtWidgets.QMessageBox(self)
         box.setWindowTitle(f"Back up before {leaving}?")
         box.setIcon(QtWidgets.QMessageBox.Icon.Question)
