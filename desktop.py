@@ -234,6 +234,27 @@ def heading(text: str, size: int | None = None) -> QtWidgets.QLabel:
     return label
 
 
+def hint_text(label: QtWidgets.QLabel) -> QtWidgets.QLabel:
+    """The voucher-type description: one centred line, a step above body text.
+
+    Deliberately NOT flowing(): it is a short sentence meant to be read in one
+    glance, so it is kept on a single line. That is only safe because it is
+    short - the longest is 53 characters, which asks for far less width than
+    the voucher grid beside it, so it cannot become the thing pinning the
+    window open. Check `test_desktop.py`'s width ceiling before lengthening
+    any of `db.VOUCHER_TYPES`.
+    """
+    label.setWordWrap(False)
+    label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    font = label.font()
+    font.setPointSize(theme.hint_point_size())
+    label.setFont(font)
+    # Marked so a text-size change resizes it, the same reason headings are:
+    # a point size set once here would never follow the application font.
+    label.setProperty("hint", True)
+    return label
+
+
 def muted(label: QtWidgets.QLabel) -> QtWidgets.QLabel:
     """Guidance text, coloured by the active scheme.
 
@@ -773,10 +794,13 @@ class VoucherScreen(QtWidgets.QWidget):
         apply_mono(self.number_label)
         head.addWidget(self.number_label)
         head.addStretch(1)
-        self.hint = flowing(QtWidgets.QLabel())
-        muted(self.hint)
-        head.addWidget(self.hint)
         layout.addLayout(head)
+
+        # Its own row, so it can be centred across the screen rather than
+        # sitting squeezed at the right-hand end of the header controls.
+        self.hint = hint_text(QtWidgets.QLabel())
+        muted(self.hint)
+        layout.addWidget(self.hint)
 
         narration_row = QtWidgets.QHBoxLayout()
         narration_row.addWidget(QtWidgets.QLabel("Narration"))
@@ -2584,8 +2608,9 @@ class MainWindow(QtWidgets.QMainWindow):
         do not follow it on their own and are fixed up here:
 
         * widgets whose point size was set once in a constructor - the screen
-          headings and the monospaced amount labels, marked with the "heading"
-          and "mono" properties when they were built;
+          headings, the voucher-type description and the monospaced amount
+          labels, marked with the "heading", "hint" and "mono" properties when
+          they were built;
         * table rows and columns, whose measured heights and widths were taken
           against the old metrics;
         * the window itself, which would otherwise keep a size chosen for
@@ -2604,6 +2629,10 @@ class MainWindow(QtWidgets.QMainWindow):
             if widget.property("heading"):
                 font = widget.font()
                 font.setPointSize(theme.heading_point_size())
+                widget.setFont(font)
+            elif widget.property("hint"):
+                font = widget.font()
+                font.setPointSize(theme.hint_point_size())
                 widget.setFont(font)
             elif widget.property("mono"):
                 widget.setFont(mono_font())

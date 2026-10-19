@@ -56,6 +56,10 @@ DEFAULT_TEXT = "large"
 # 15pt against a 9pt body.
 HEADING_STEP = 6
 
+# How much larger the voucher-type description is than body text. Smaller gap
+# than a heading: it explains the screen rather than naming it.
+HINT_STEP = 3
+
 _base_point = 0
 _base_family = ""
 _active_text = DEFAULT_TEXT
@@ -391,6 +395,10 @@ def point_size() -> int:
 
 def heading_point_size() -> int:
     return point_size() + HEADING_STEP
+
+
+def hint_point_size() -> int:
+    return point_size() + HINT_STEP
 
 
 def text_scale() -> float:

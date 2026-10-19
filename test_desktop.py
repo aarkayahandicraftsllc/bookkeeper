@@ -520,10 +520,32 @@ for index in range(len(window.screens)):
     check(f"{window.screens[index][0]} fits the window at largest size",
           fits, True)
 
+# The voucher-type description is the one label deliberately left UNWRAPPED,
+# so it is the one that can pin the window open. Still at the largest size
+# here, which is where it costs the most.
+hint = window.voucher.hint
+longest = max(db.VOUCHER_TYPES.values(), key=len)
+hint.setText(longest)
+QtWidgets.QApplication.processEvents()
+check("the description is on one line", hint.wordWrap(), False)
+check("and centred",
+      bool(hint.alignment() & QtCore.Qt.AlignmentFlag.AlignHCenter), True)
+check("and larger than body text",
+      hint.font().pointSize() > QtWidgets.QApplication.font().pointSize(), True)
+# If a longer description is ever added this is what will fail, rather than
+# the window quietly growing past the width of a laptop screen.
+check(f"the longest description ({len(longest)} chars) stays under "
+      f"{WIDTH_CEILING}px unwrapped",
+      hint.sizeHint().width() < WIDTH_CEILING, True)
+print(f"       description at largest: {hint.font().pointSize()}pt, "
+      f"{hint.sizeHint().width()}px of the {WIDTH_CEILING}px ceiling")
+
 # Back to the default, and the books still add up after all that.
 window.set_text_size(theme.DEFAULT_TEXT)
 check("text size returns to the default",
       QtWidgets.QApplication.font().pointSize(), base_pt)
+check("the description followed the text size back down",
+      window.voucher.hint.font().pointSize(), theme.hint_point_size())
 check("the balance sheet still balances",
       acc.balance_sheet()["totals"]["difference"], 0.0, tol=0.0)
 
