@@ -69,6 +69,30 @@ def money(value: float) -> str:
     return f"{sign}{symbol}{abs(value):,.2f}"
 
 
+# Every report frame carries its dates as ISO strings, because that is what
+# sorts correctly and what a spreadsheet can read. Only the two DISPLAY
+# boundaries - a table on screen, and the printed page - rewrite them in the
+# books' own format, so a column named any of these is formatted there.
+DATE_COLUMNS = ("Date",)
+
+
+def shown_dates(frame: pd.DataFrame) -> pd.DataFrame:
+    """A COPY of ``frame`` with its date columns in the books' own format.
+
+    Always a copy, even with nothing to format: callers go on to rewrite their
+    money columns in place, and handing one of them the caller's own frame
+    would quietly reformat the screen's data behind it.
+    """
+    frame = frame.copy()
+    columns = [c for c in DATE_COLUMNS if c in frame.columns]
+    if not columns:
+        return frame
+    fmt = db.date_format()              # asked once, not once per cell
+    for column in columns:
+        frame[column] = [db.show_date(value, fmt) for value in frame[column]]
+    return frame
+
+
 def to_qdate(value) -> QtCore.QDate:
     if isinstance(value, str):
         value = date.fromisoformat(value)
@@ -107,7 +131,7 @@ class FrameTable(QtWidgets.QTableWidget):
 
     def load(self, frame: pd.DataFrame, numeric: tuple[str, ...] = (),
              bold_last: bool = False) -> None:
-        frame = frame.reset_index(drop=True)
+        frame = shown_dates(frame).reset_index(drop=True)
         self.clear()
         self.setRowCount(len(frame))
         self.setColumnCount(len(frame.columns))
@@ -201,11 +225,17 @@ def editor_for(field) -> QtWidgets.QWidget:
     if field.kind == "date":
         editor = QtWidgets.QDateEdit()
         editor.setCalendarPopup(True)
-        editor.setDisplayFormat("dd/MM/yyyy")
+        editor.setDisplayFormat(db.date_format().qt)
         return editor
     if field.kind == "choice":
         editor = QtWidgets.QComboBox()
         editor.setEditable(True)            # so an unlisted symbol still works
+        editor.addItems(list(field.choices))
+        return editor
+    if field.kind == "option":
+        # Closed, unlike `choice`: a date format the code cannot render is not
+        # a value, so there is nothing for a typed one to mean.
+        editor = QtWidgets.QComboBox()
         editor.addItems(list(field.choices))
         return editor
     editor = QtWidgets.QLineEdit()
@@ -315,15 +345,21 @@ class Report:
 def period_caption(bar: "PeriodBar") -> str:
     """How a report's period reads on paper."""
     start, end = bar.range()
+    fmt = db.date_format()
     if start is None:
-        return f"as at {end:%d/%m/%Y}"
-    return f"{start:%d/%m/%Y} to {end:%d/%m/%Y}"
+        return f"as at {db.show_date(end, fmt)}"
+    return f"{db.show_date(start, fmt)} to {db.show_date(end, fmt)}"
 
 
 def _for_display(section: ReportSection) -> pd.DataFrame:
     """The section with its money columns written the way the screen shows
-    them - grouped thousands, two decimals, and blank rather than 0.00."""
-    frame = section.frame.copy()
+    them - grouped thousands, two decimals, and blank rather than 0.00.
+
+    Dates go the same way, so the printed page reads as the screen does. The
+    export path deliberately does NOT come through here: a spreadsheet wants a
+    number it can sum and an ISO date it can sort, not either one as text.
+    """
+    frame = shown_dates(section.frame)
     for column in section.numeric:
         if column not in frame.columns:
             continue
@@ -791,7 +827,7 @@ class VoucherScreen(QtWidgets.QWidget):
 
         self.date_edit = QtWidgets.QDateEdit(to_qdate(date.today()))
         self.date_edit.setCalendarPopup(True)
-        self.date_edit.setDisplayFormat("dd/MM/yyyy")
+        self.date_edit.setDisplayFormat(db.date_format().qt)
         head.addWidget(QtWidgets.QLabel("Date"))
         head.addWidget(self.date_edit)
 
@@ -1239,7 +1275,7 @@ class PeriodDialog(QtWidgets.QDialog):
         self.to_edit = QtWidgets.QDateEdit(to_qdate(end))
         for editor in (self.from_edit, self.to_edit):
             editor.setCalendarPopup(True)
-            editor.setDisplayFormat("dd/MM/yyyy")
+            editor.setDisplayFormat(db.date_format().qt)
         if with_from:
             form.addRow("From", self.from_edit)
             form.addRow("To", self.to_edit)
@@ -1331,14 +1367,14 @@ class PeriodBar(QtWidgets.QWidget):
             row.addWidget(QtWidgets.QLabel("From"))
             self.from_edit = QtWidgets.QDateEdit()
             self.from_edit.setCalendarPopup(True)
-            self.from_edit.setDisplayFormat("dd/MM/yyyy")
+            self.from_edit.setDisplayFormat(db.date_format().qt)
             self.from_edit.dateChanged.connect(self._date_typed)
             row.addWidget(self.from_edit)
 
         row.addWidget(QtWidgets.QLabel("To" if with_from else "As at"))
         self.to_edit = QtWidgets.QDateEdit(to_qdate(date.today()))
         self.to_edit.setCalendarPopup(True)
-        self.to_edit.setDisplayFormat("dd/MM/yyyy")
+        self.to_edit.setDisplayFormat(db.date_format().qt)
         self.to_edit.dateChanged.connect(self._date_typed)
         row.addWidget(self.to_edit)
 
@@ -2193,7 +2229,8 @@ class CompanyPicker(QtWidgets.QDialog):
         details = db.peek_company(path)
         changed = datetime.fromtimestamp(path.stat().st_mtime)
         parts = [f"{details['file']}",
-                 f"last changed {changed.strftime('%d/%m/%Y %H:%M')}"]
+                 f"last changed {db.show_date(changed.date())}"
+                 f" {changed.strftime('%H:%M')}"]
         if details["gstin"]:
             parts.append(f"GSTIN {details['gstin']}")
         if path.name == self.current.name:
@@ -2305,7 +2342,7 @@ class CompanyScreen(QtWidgets.QWidget):
             elif field.kind == "date":
                 editor.setDate(to_qdate(value) if value
                                else to_qdate(date.today()))
-            elif field.kind == "choice":
+            elif field.kind in ("choice", "option"):
                 editor.setCurrentText(value)
             else:
                 editor.setText(value)
@@ -2321,7 +2358,7 @@ class CompanyScreen(QtWidgets.QWidget):
                 out[field.key] = str(editor.currentData())
             elif field.kind == "date":
                 out[field.key] = from_qdate(editor.date()).isoformat()
-            elif field.kind == "choice":
+            elif field.kind in ("choice", "option"):
                 out[field.key] = editor.currentText()
             else:
                 out[field.key] = editor.text()
@@ -2916,6 +2953,13 @@ class MainWindow(QtWidgets.QMainWindow):
         """Company details were saved: the title and every figure can change,
         since the currency symbol and the financial year both live there."""
         self._set_title()
+        # A QDateEdit's display format is set ONCE, when it is built, so every
+        # editor on every other screen would go on showing the old order after
+        # the date format was changed. The tables re-read it by themselves,
+        # because Table.load formats dates as it fills them.
+        shown = db.date_format().qt
+        for editor in self.findChildren(QtWidgets.QDateEdit):
+            editor.setDisplayFormat(shown)
         self.voucher.reload_ledgers()
         self.ledger.reload_ledgers()
         # The financial-year start month is on that screen, and it decides

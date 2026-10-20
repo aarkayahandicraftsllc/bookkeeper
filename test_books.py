@@ -788,5 +788,59 @@ check("blank lines are not lines", db._split_address("A\n\n \nB"), ["A", "B"])
 db.use_company(kept)
 legacy.unlink(missing_ok=True)
 
+print("\n21) How dates are shown, and what is stored underneath")
+# The ask (2026-10-20): "if the currency sign is $ the date format should be
+# MM/DD/YYYY and if its Rupees ... DD/MM/YYYY or provide a seperate line for
+# selecting date format". Built as a SETTING whose first value comes from the
+# currency - so both halves hold, without the two being chained forever.
+db.save_company(dict(GOOD, currency="₹", date_format=""))
+check("rupee books start on DD/MM/YYYY",
+      db.date_format().key, "DD/MM/YYYY")
+db.save_company(dict(GOOD, currency="$", date_format=""))
+check("dollar books start on MM/DD/YYYY",
+      db.date_format().key, "MM/DD/YYYY")
+check("and the derived value is SAVED, not re-derived every read",
+      db.get_setting("date_format"), "MM/DD/YYYY")
+
+# The point of it being its own field: a chosen format is not overruled.
+db.save_company(dict(GOOD, currency="$", date_format="DD/MM/YYYY"))
+check("a chosen format outranks the currency",
+      db.date_format().key, "DD/MM/YYYY")
+db.save_company(dict(GOOD, currency="€", date_format="DD/MM/YYYY"))
+check("and changing the currency does not reorder the dates",
+      db.date_format().key, "DD/MM/YYYY")
+
+try:
+    db.validate_company(dict(GOOD, date_format="YY.MM.DD"))
+    check("a format the app cannot render is refused", "accepted", "rejected")
+except ValueError as exc:
+    check("a format the app cannot render is refused", "rejected", "rejected")
+    check("and it lists the ones that work", "MM/DD/YYYY" in str(exc), True)
+
+# show_date is the single formatter both front ends call.
+for name, fmt in (("DD/MM/YYYY", "DD/MM/YYYY"), ("MM/DD/YYYY", "MM/DD/YYYY")):
+    db.save_company(dict(GOOD, date_format=fmt))
+    check(f"an ISO string shown as {name}",
+          db.show_date("2026-03-04"), "04/03/2026" if fmt[0] == "D"
+          else "03/04/2026")
+    check(f"a date object shown as {name}",
+          db.show_date(date(2026, 3, 4)), "04/03/2026" if fmt[0] == "D"
+          else "03/04/2026")
+check("a blank is blank, not a crash", db.show_date(""), "")
+check("and so is a missing value", db.show_date(None), "")
+check("something that is not a date is passed through as written",
+      db.show_date("Opening Balance"), "Opening Balance")
+
+# THE INVARIANT: only the display changes. Nothing localised is ever stored,
+# or the file would be ambiguous and the Date column would sort wrongly.
+db.save_company(dict(GOOD, date_format="MM/DD/YYYY"))
+vid = post("Journal", 7, "stored ISO", ("Rent", 10, 0), ("Cash", 0, 10))
+check("the voucher date is stored ISO whatever is displayed",
+      db.get_voucher(vid)[0]["voucher_date"], "2026-04-07")
+check("so the report frame carries ISO too",
+      str(acc.day_book(date(2026, 4, 7), date(2026, 4, 7))["Date"].iloc[0]),
+      "2026-04-07")
+db.save_company(dict(GOOD, date_format="DD/MM/YYYY"))
+
 print("\n" + ("ALL CHECKS PASSED" if not FAILURES else f"FAILURES: {FAILURES}"))
 raise SystemExit(1 if FAILURES else 0)
