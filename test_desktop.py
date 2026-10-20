@@ -1412,7 +1412,7 @@ check("and gives the number up",
 QtWidgets.QMessageBox.question = _real_question
 voucher.reset()
 
-print("\n22d) The balance sheet, summarised and detailed")
+print("\n23b) The balance sheet, summarised and detailed")
 window.show_screen(5)
 settle()
 bs = window.sheet
@@ -1452,7 +1452,7 @@ check("unticking it goes back to the summary",
       bs.liabilities.rowCount(), summary_rows)
 check("and sorting comes back", bs.liabilities._pinned_last, False)
 
-print("\n23b) Copying a voucher, for an entry that repeats")
+print("\n23c) Copying a voucher, for an entry that repeats")
 db.use_company(TMP)
 v = window.voucher
 window.show_screen(0)
