@@ -63,6 +63,13 @@ VOUCHER_KEYS = {
 }
 
 
+# The copy button says which voucher it would copy, because the answer depends
+# on where you are: the one you are altering, or the last one of the type the
+# form is set to. A button that just said "Copy" would be a guess either way.
+COPY_THIS = "Copy this voucher"
+COPY_LAST = "Copy last {kind}"
+
+
 def money(value: float) -> str:
     symbol = db.get_setting("currency", "₹")
     sign = "-" if value < 0 else ""
@@ -117,8 +124,57 @@ def parse_amount(text: str) -> float:
 # --------------------------------------------------------------------------- #
 # a read-only table built from a DataFrame
 # --------------------------------------------------------------------------- #
+# The row's own identity, carried on its first cell. A sorted table no longer
+# has screen row 3 at frame row 3, and three places used to read the data by
+# POSITION: double-click-to-alter on the Day Book and the Ledger, and Delete
+# ledger on Masters - the last of which would have deleted whichever ledger
+# happened to land on that line. The key travels with the row instead.
+ROW_KEY = int(QtCore.Qt.ItemDataRole.UserRole) + 1
+
+
+class _Cell(QtWidgets.QTableWidgetItem):
+    """A cell that sorts on a KEY rather than on what it says.
+
+    Clicking a header has to sort by VALUE. An amount reads "1,234.00" and a
+    date reads "19/10/2026"; sorted as text, 1,234 comes before 900 and
+    October before March - a sortable header that did that would be worse
+    than no sorting at all.
+    """
+
+    def __init__(self, text: str, key=None):
+        super().__init__(text)
+        self.key = text if key is None else key
+
+    def __lt__(self, other):
+        theirs = other.key if isinstance(other, _Cell) else other.text()
+        try:
+            return self.key < theirs
+        except TypeError:          # mixed kinds, e.g. a label among numbers
+            return str(self.key) < str(theirs)
+
+
+def _amount_cell(value) -> tuple[str, float | str]:
+    """An amount as it is shown, and what it sorts by."""
+    if pd.isna(value):
+        return "", 0.0
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        # Presentation text in a money column: the ledger's Balance column
+        # carries "88,000.00 Dr". Shown and sorted as written.
+        return str(value), str(value)
+    return ("" if abs(number) < 0.005 else f"{number:,.2f}"), number
+
+
 class FrameTable(QtWidgets.QTableWidget):
-    """Displays a DataFrame. Numeric columns are right-aligned and formatted."""
+    """Displays a DataFrame. Numeric columns are right-aligned and formatted.
+
+    Click a column header to sort by it, and again to reverse it (asked for
+    2026-10-20). Sorting is OURS rather than Qt's `setSortingEnabled`, which
+    sorts the moment it is switched on and would have thrown away each
+    report's own order - the Day Book's newest-first above all - before the
+    user had clicked anything.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -128,10 +184,40 @@ class FrameTable(QtWidgets.QTableWidget):
         self.setAlternatingRowColors(True)
         self.verticalHeader().setVisible(False)
         self.setSortingEnabled(False)
+        self._sort: tuple[int, QtCore.Qt.SortOrder] | None = None
+        self._pinned_last = False
+        header = self.horizontalHeader()
+        header.setSortIndicatorShown(True)
+        header.setSectionsClickable(True)
+        header.sectionClicked.connect(self.sort_by)
+
+    def sort_by(self, column: int) -> None:
+        """Sort by a column; clicking the same one again reverses it."""
+        if self._pinned_last or not self.rowCount():
+            return
+        ascending = QtCore.Qt.SortOrder.AscendingOrder
+        descending = QtCore.Qt.SortOrder.DescendingOrder
+        order = (descending if self._sort == (column, ascending)
+                 else ascending)
+        self._sort = (column, order)
+        self.sortItems(column, order)
+        self.horizontalHeader().setSortIndicator(column, order)
+
+    def key_at(self, row: int) -> object:
+        """What the data layer calls the row now on this line of the screen."""
+        item = self.item(row, 0)
+        return None if item is None else item.data(ROW_KEY)
 
     def load(self, frame: pd.DataFrame, numeric: tuple[str, ...] = (),
-             bold_last: bool = False) -> None:
-        frame = shown_dates(frame).reset_index(drop=True)
+             bold_last: bool = False, keys=None) -> None:
+        raw = frame.reset_index(drop=True)
+        frame = shown_dates(raw)
+        keys = None if keys is None else list(keys)
+        # A pinned total row cannot survive a sort - it would be carried off
+        # into the middle of the figures it totals - so a table that has one
+        # does not offer sorting. The Trial Balance keeps its total in a bar
+        # below the table instead, which is what lets it be sorted.
+        self._pinned_last = bold_last
         self.clear()
         self.setRowCount(len(frame))
         self.setColumnCount(len(frame.columns))
@@ -139,22 +225,36 @@ class FrameTable(QtWidgets.QTableWidget):
 
         for row in range(len(frame)):
             for col, column in enumerate(frame.columns):
-                raw = frame.iloc[row, col]
+                value = frame.iloc[row, col]
                 if column in numeric:
-                    number = 0.0 if pd.isna(raw) else float(raw)
-                    text = "" if abs(number) < 0.005 else f"{number:,.2f}"
-                    item = QtWidgets.QTableWidgetItem(text)
+                    text, key = _amount_cell(value)
+                    item = _Cell(text, key)
                     item.setTextAlignment(QtCore.Qt.AlignRight
                                           | QtCore.Qt.AlignVCenter)
                     item.setFont(mono_font())
+                elif column in DATE_COLUMNS:
+                    # Sorted on the ISO underneath, which is chronological as
+                    # text; what is SHOWN is the books' own format.
+                    item = _Cell("" if pd.isna(value) else str(value),
+                                 str(raw.iloc[row, col]))
                 else:
-                    item = QtWidgets.QTableWidgetItem(
-                        "" if pd.isna(raw) else str(raw))
+                    text = "" if pd.isna(value) else str(value)
+                    # Case-folded, or ASCII puts every capital before every
+                    # lower-case letter and the order looks arbitrary.
+                    item = _Cell(text, text.casefold())
                 if bold_last and row == len(frame) - 1:
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
                 self.setItem(row, col, item)
+            if keys is not None and self.item(row, 0) is not None:
+                self.item(row, 0).setData(ROW_KEY, keys[row])
+
+        # A sort the user chose outlives a refresh: posting a voucher should
+        # not quietly put the report back in its default order.
+        if self._sort is not None and not bold_last and len(frame):
+            self.sortItems(*self._sort)
+            self.horizontalHeader().setSortIndicator(*self._sort)
 
         header = self.horizontalHeader()
         header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
@@ -917,6 +1017,12 @@ class VoucherScreen(QtWidgets.QWidget):
         self.restore_button.clicked.connect(self.restore_voucher)
         self.restore_button.setVisible(False)
         bottom.addWidget(self.restore_button)
+        # Not destructive, but it DOES replace whatever is in the grid, so it
+        # keeps away from Accept with the rest of the voucher-level actions.
+        self.copy_button = QtWidgets.QPushButton(
+            COPY_LAST.format(kind="voucher"))
+        self.copy_button.clicked.connect(self.copy_voucher)
+        bottom.addWidget(self.copy_button)
         bottom.addStretch(1)
         self.cancel_button = QtWidgets.QPushButton("Cancel edit")
         self.cancel_button.clicked.connect(self.reset)
@@ -1044,6 +1150,10 @@ class VoucherScreen(QtWidgets.QWidget):
             self.number_label.setText(
                 f"No. {db.next_voucher_number(name)}")
         self.hint.setText(db.VOUCHER_TYPES.get(name, ""))
+        # Both the label and whether it is enabled depend on the type, and
+        # every path that changes the type or resets the form comes through
+        # here - so this is the one place it needs saying.
+        self._update_copy_button()
         self._recalculate()
 
     # --- actions ------------------------------------------------------- #
@@ -1119,6 +1229,95 @@ class VoucherScreen(QtWidgets.QWidget):
         self._add_row()
         self._type_changed(self.type_box.currentText())
 
+    def _update_copy_button(self) -> None:
+        """Say which voucher the button would copy, and whether there is one."""
+        if self.editing_id is not None:
+            self.copy_button.setText(COPY_THIS)
+            self.copy_button.setEnabled(True)
+            self.copy_button.setToolTip(
+                "Start a new voucher with these same lines, dated today. "
+                "Nothing is saved until you accept it.")
+            return
+        kind = self.type_box.currentText()
+        self.copy_button.setText(COPY_LAST.format(kind=kind.lower()))
+        available = db.last_voucher_id(kind) is not None
+        self.copy_button.setEnabled(available)
+        self.copy_button.setToolTip(
+            f"Fill this form from the last {kind.lower()} voucher, dated "
+            f"today - for an entry that repeats. Nothing is saved until you "
+            f"accept it." if available else
+            f"There is no {kind.lower()} voucher in these books yet to copy.")
+
+    def copy_voucher(self) -> None:
+        """Start a NEW voucher with the lines of an existing one.
+
+        Asked for 2026-10-20, for recurring entries: "I need a button there to
+        create a copy the same voucher again to avoid typing everything again"
+        and "a button in voucher entry for copy last voucher". Those are two
+        ways into the same thing, so it is one button that copies whichever
+        voucher is in front of you - the one being altered, or the last one of
+        the type the form is set to.
+
+        It is a DRAFT. Nothing is written until Accept, the number is the next
+        one for the type, and the date is today - which is the whole point of
+        a recurring entry, and the one field you would otherwise always have
+        to change.
+        """
+        kind = self.type_box.currentText()
+        source = (self.editing_id if self.editing_id is not None
+                  else db.last_voucher_id(kind))
+        if source is None:
+            QtWidgets.QMessageBox.information(
+                self, "Nothing to copy",
+                f"There is no {kind.lower()} voucher in these books yet.")
+            return
+        record = db.get_voucher(int(source))
+        if not record:
+            return
+        head, lines = record
+
+        # Replacing a part-typed voucher without asking would lose the typing,
+        # the same reason switching company warns first.
+        if self.editing_id is None and self.row_values():
+            if QtWidgets.QMessageBox.question(
+                    self, "Replace what you have typed?",
+                    f"This form already has entries. Replace them with a copy "
+                    f"of {head['voucher_type'].lower()} voucher no. "
+                    f"{head['number']}?") != \
+                    QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+
+        self.reset()                      # a copy is a new voucher, not an edit
+        self._loading = True
+        self.type_box.setCurrentText(str(head["voucher_type"]))
+        self.narration.setText(str(head["narration"]))
+        self._loading = False
+        self._fill_lines(lines)
+        self._update_copy_button()
+        window = self.window()
+        if isinstance(window, QtWidgets.QMainWindow):
+            window.statusBar().showMessage(
+                f"Copied {head['voucher_type'].lower()} voucher no. "
+                f"{head['number']}. Check the date, then accept.", 8000)
+
+    def _fill_lines(self, lines) -> None:
+        """Replace the grid with these lines, plus the one spare at the end.
+
+        THE ORDER MATTERS. `_recalculate` keeps a spare blank line under a
+        filled last row and `_add_row` ends by calling it, so the flag has to
+        stay on for the whole loop: cleared before it, as `load_voucher` did
+        until 2026-10-20, every loaded line appended a blank one after itself
+        and the grid came out line, blank, line, blank. Both callers go
+        through here so the order cannot drift apart again.
+        """
+        self._loading = True
+        self.grid.setRowCount(0)
+        for line in lines:
+            self._add_row(str(line["ledger_name"]), float(line["debit"]),
+                          float(line["credit"]))
+        self._loading = False
+        self._recalculate()
+
     def load_voucher(self, voucher_id: int) -> None:
         record = db.get_voucher(voucher_id)
         if not record:
@@ -1143,18 +1342,12 @@ class VoucherScreen(QtWidgets.QWidget):
         self.date_edit.setDate(to_qdate(str(head["voucher_date"])))
         self.narration.setText(str(head["narration"]))
         self.number_label.setText(f"No. {head['number']}")
-        self.grid.setRowCount(0)
-        for line in lines:
-            self._add_row(str(line["ledger_name"]), float(line["debit"]),
-                          float(line["credit"]))
-        # The flag comes off only now. _recalculate() keeps a spare blank line
-        # under a filled last row, and _add_row ends by calling it - so
-        # clearing this before the loop (as it was until 2026-10-20) gave the
-        # loaded voucher a blank line after EVERY line instead of one at the
-        # end. Every other bulk edit here follows the same order: set the
-        # flag, mutate the grid, clear it, recalculate once.
-        self._loading = False
-        self._recalculate()
+        # Said here as well as in _type_changed: setCurrentText above emits
+        # NOTHING when the type is already the one shown, which is the common
+        # case when altering - so the button went on offering "copy last"
+        # while a voucher was open in front of it.
+        self._update_copy_button()
+        self._fill_lines(lines)
 
     def _voucher_label(self) -> str:
         head = self.title.text()
@@ -1590,7 +1783,9 @@ class DayBookScreen(QtWidgets.QWidget):
         # Kept for print and export: what is on SCREEN, without the voucher
         # id the table hides and no reader of a report wants to see.
         self._shown = shown
-        self.table.load(shown, numeric=("Debit", "Credit"))
+        self.table.load(shown, numeric=("Debit", "Credit"),
+                        keys=self._frame["voucher_id"] if not frame.empty
+                        else [])
 
     def report(self) -> Report:
         kind = self.type_filter.currentText()
@@ -1602,8 +1797,12 @@ class DayBookScreen(QtWidgets.QWidget):
             notes=[self.count.text()])
 
     def _open(self, index) -> None:
-        if 0 <= index.row() < len(self._frame):
-            self.open_voucher.emit(int(self._frame.iloc[index.row()]["voucher_id"]))
+        # Read from the row, not from its position: once the table is sorted,
+        # screen row 3 is not frame row 3, and this would open whichever
+        # voucher happened to land on the line that was clicked.
+        key = self.table.key_at(index.row())
+        if key is not None:
+            self.open_voucher.emit(int(key))
 
 
 class LedgerScreen(QtWidgets.QWidget):
@@ -1678,7 +1877,9 @@ class LedgerScreen(QtWidgets.QWidget):
             f"  ·  Debit {statement['debit_total']:,.2f}"
             f"  ·  Credit {statement['credit_total']:,.2f}"
             f"  ·  Closing {acc.fmt_side(statement['closing'])}")
-        self.table.load(shown, numeric=("Debit", "Credit"))
+        self.table.load(shown, numeric=("Debit", "Credit"),
+                        keys=self._frame["voucher_id"]
+                        if not self._frame.empty else [])
 
         while self.footer_slot.count():
             item = self.footer_slot.takeAt(0)
@@ -1699,8 +1900,12 @@ class LedgerScreen(QtWidgets.QWidget):
             notes=[self._summary])
 
     def _open(self, index) -> None:
-        if 0 <= index.row() < len(self._frame):
-            self.open_voucher.emit(int(self._frame.iloc[index.row()]["voucher_id"]))
+        # Read from the row, not from its position: once the table is sorted,
+        # screen row 3 is not frame row 3, and this would open whichever
+        # voucher happened to land on the line that was clicked.
+        key = self.table.key_at(index.row())
+        if key is not None:
+            self.open_voucher.emit(int(key))
 
 
 class TrialBalanceScreen(QtWidgets.QWidget):
@@ -1719,6 +1924,14 @@ class TrialBalanceScreen(QtWidgets.QWidget):
         layout.addWidget(self.status)
         self.table = FrameTable()
         layout.addWidget(self.table, 1)
+        # The total used to be the last ROW of the table, bold. It moved out
+        # here so the table can be sorted by clicking a header: a total row
+        # sorts like any other and would be carried off into the middle of
+        # the figures it totals. The Ledger has had this bar all along, and
+        # the printed report still carries the Total as a row.
+        self.footer_slot = QtWidgets.QVBoxLayout()
+        self.footer_slot.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(self.footer_slot)
         layout.addWidget(ReportActions(self.report))
         self._shown = pd.DataFrame()
 
@@ -1739,13 +1952,24 @@ class TrialBalanceScreen(QtWidgets.QWidget):
                 columns=["Particulars", "Debit", "Credit"])
             self.table.load(self._shown, numeric=("Debit", "Credit"))
         else:
+            # The screen shows the rows alone, so they can be sorted; the
+            # REPORT keeps the Total as its last row, because a printed trial
+            # balance without its total is not a trial balance.
             total = {"Particulars": "Total", "Debit": trial["debit"],
                      "Credit": trial["credit"]}
             if "Under" in rows.columns:
                 total["Under"] = ""
-            shown = pd.concat([rows, pd.DataFrame([total])], ignore_index=True)
-            self._shown = shown
-            self.table.load(shown, numeric=("Debit", "Credit"), bold_last=True)
+            self._shown = pd.concat([rows, pd.DataFrame([total])],
+                                    ignore_index=True)
+            self.table.load(rows, numeric=("Debit", "Credit"))
+
+        while self.footer_slot.count():
+            item = self.footer_slot.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.footer_slot.addWidget(totals_bar(
+            ("Total debit", f"{trial['debit']:,.2f}"),
+            ("Total credit", f"{trial['credit']:,.2f}")))
 
         if abs(trial["difference"]) <= acc.EPS:
             self.status.setText("Debits equal credits.")
@@ -2026,7 +2250,8 @@ class MastersScreen(QtWidgets.QWidget):
                 lambda i: acc.fmt_side(float(balances.loc[i, "closing"]))
                 if i in balances.index else "—"),
         })
-        self.ledger_table.load(view, numeric=("Opening",))
+        self.ledger_table.load(view, numeric=("Opening",),
+                               keys=ledgers["name"])
         self._ledger_names = list(ledgers["name"])
 
         groups = db.get_groups()
@@ -2064,9 +2289,13 @@ class MastersScreen(QtWidgets.QWidget):
 
     def delete_ledger(self) -> None:
         row = self.ledger_table.currentRow()
-        if row < 0 or row >= len(self._ledger_names):
+        if row < 0:
             return
-        name = self._ledger_names[row]
+        name = self.ledger_table.key_at(row)
+        # By POSITION this read self._ledger_names[row], which after a sort
+        # named a different ledger than the one highlighted - and deleted it.
+        if not name or name not in self._ledger_names:
+            return
         try:
             db.delete_ledger(db.ledger_id(name))
         except ValueError as exc:
