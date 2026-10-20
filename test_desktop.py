@@ -204,6 +204,15 @@ check("it switched to voucher entry", window.stack.currentIndex(), 0)
 check("it is in altering mode", window.voucher.editing_id, first_id)
 check("the title says so", "Altering" in window.voucher.title.text(), True)
 check("the lines were loaded", len(window.voucher.row_values()), 2)
+# row_values() SKIPS blank rows, so it cannot see a grid full of them - which
+# is how a blank line after EVERY loaded line went unnoticed until the user
+# found it. Count the grid itself: the lines, plus the one spare at the end.
+check("the grid holds the lines and ONE spare line",
+      window.voucher.grid.rowCount(), 3)
+check("and the spare is the last row, not between the lines",
+      [bool(window.voucher.grid.cellWidget(r, 0).currentText().strip())
+       for r in range(window.voucher.grid.rowCount())],
+      [True, True, False])
 # isVisible() needs a shown ancestor; isHidden() reflects the widget's
 # own setVisible call, which is what we actually set here
 check("cancel is offered", window.voucher.cancel_button.isHidden(), False)

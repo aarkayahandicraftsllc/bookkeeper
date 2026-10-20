@@ -1144,10 +1144,16 @@ class VoucherScreen(QtWidgets.QWidget):
         self.narration.setText(str(head["narration"]))
         self.number_label.setText(f"No. {head['number']}")
         self.grid.setRowCount(0)
-        self._loading = False
         for line in lines:
             self._add_row(str(line["ledger_name"]), float(line["debit"]),
                           float(line["credit"]))
+        # The flag comes off only now. _recalculate() keeps a spare blank line
+        # under a filled last row, and _add_row ends by calling it - so
+        # clearing this before the loop (as it was until 2026-10-20) gave the
+        # loaded voucher a blank line after EVERY line instead of one at the
+        # end. Every other bulk edit here follows the same order: set the
+        # flag, mutate the grid, clear it, recalculate once.
+        self._loading = False
         self._recalculate()
 
     def _voucher_label(self) -> str:
