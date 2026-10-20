@@ -1412,6 +1412,46 @@ check("and gives the number up",
 QtWidgets.QMessageBox.question = _real_question
 voucher.reset()
 
+print("\n22d) The balance sheet, summarised and detailed")
+window.show_screen(5)
+settle()
+bs = window.sheet
+check("it opens summarised", bs.detailed.isChecked(), False)
+summary_rows = bs.liabilities.rowCount()
+summary_total = bs.liability_label.text()
+check("and its tables can be sorted", bs.liabilities._pinned_last, False)
+
+bs.detailed.setChecked(True)
+settle()
+check("ticking it adds rows", bs.liabilities.rowCount() > summary_rows, True)
+check("which are indented accounts",
+      any(bs.liabilities.item(r, 0).text().startswith(acc.DETAIL_INDENT)
+          for r in range(bs.liabilities.rowCount())), True)
+check("the side total does NOT change", bs.liability_label.text(),
+      summary_total)
+# An indented table cannot be sorted: the accounts would be carried away from
+# the heading they belong under, and the statement would say nothing true.
+check("so sorting is withdrawn while it is detailed",
+      bs.liabilities._pinned_last, True)
+before_sort = [bs.liabilities.item(r, 0).text()
+               for r in range(bs.liabilities.rowCount())]
+bs.liabilities.sort_by(0)
+settle()
+check("and clicking a header does nothing",
+      [bs.liabilities.item(r, 0).text()
+       for r in range(bs.liabilities.rowCount())], before_sort)
+check("the printed report says which format it is",
+      "under each heading" in bs.report().period, True)
+check("and warns that the column holds both",
+      any("totals above are the ones to read" in n for n in bs.report().notes),
+      True)
+
+bs.detailed.setChecked(False)
+settle()
+check("unticking it goes back to the summary",
+      bs.liabilities.rowCount(), summary_rows)
+check("and sorting comes back", bs.liabilities._pinned_last, False)
+
 print("\n23b) Copying a voucher, for an entry that repeats")
 db.use_company(TMP)
 v = window.voucher

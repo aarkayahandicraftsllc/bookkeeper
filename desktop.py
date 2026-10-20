@@ -209,15 +209,18 @@ class FrameTable(QtWidgets.QTableWidget):
         return None if item is None else item.data(ROW_KEY)
 
     def load(self, frame: pd.DataFrame, numeric: tuple[str, ...] = (),
-             bold_last: bool = False, keys=None) -> None:
+             bold_last: bool = False, keys=None,
+             sortable: bool = True) -> None:
         raw = frame.reset_index(drop=True)
         frame = shown_dates(raw)
         keys = None if keys is None else list(keys)
-        # A pinned total row cannot survive a sort - it would be carried off
-        # into the middle of the figures it totals - so a table that has one
-        # does not offer sorting. The Trial Balance keeps its total in a bar
-        # below the table instead, which is what lets it be sorted.
-        self._pinned_last = bold_last
+        # Two kinds of table cannot be sorted. One has a pinned total row,
+        # which would be carried off into the middle of the figures it
+        # totals - the Trial Balance keeps its total in a bar below the
+        # table instead, which is what lets it be sorted. The other is an
+        # INDENTED one: the detailed Balance Sheet lists accounts under
+        # their heading, and a sort would scatter them away from it.
+        self._pinned_last = bold_last or not sortable
         self.clear()
         self.setRowCount(len(frame))
         self.setColumnCount(len(frame.columns))
@@ -252,7 +255,7 @@ class FrameTable(QtWidgets.QTableWidget):
 
         # A sort the user chose outlives a refresh: posting a voucher should
         # not quietly put the report back in its default order.
-        if self._sort is not None and not bold_last and len(frame):
+        if self._sort is not None and not self._pinned_last and len(frame):
             self.sortItems(*self._sort)
             self.horizontalHeader().setSortIndicator(*self._sort)
 
@@ -2098,6 +2101,13 @@ class BalanceSheetScreen(QtWidgets.QWidget):
         self.period = PeriodBar(with_from=False)
         self.period.changed.connect(self.refresh)
         layout.addWidget(self.period)
+        # Summary is the default: a balance sheet is read at the heading level
+        # first, and the accounts are what you open up when a heading looks
+        # wrong. Same shape as the Trial Balance's "Summarise by group".
+        self.detailed = QtWidgets.QCheckBox(
+            "Show the accounts under each heading")
+        self.detailed.toggled.connect(self.refresh)
+        layout.addWidget(self.detailed)
         self.status = flowing(QtWidgets.QLabel())
         layout.addWidget(self.status)
 
@@ -2133,7 +2143,9 @@ class BalanceSheetScreen(QtWidgets.QWidget):
         blank = pd.DataFrame(columns=["Particulars", "Amount"])
         return Report(
             title="Balance Sheet",
-            period=period_caption(self.period),
+            period=period_caption(self.period)
+            + ("  ·  accounts shown under each heading"
+               if self.detailed.isChecked() else ""),
             sections=[
                 ReportSection("Liabilities",
                               self._sides.get("liabilities", blank),
@@ -2144,18 +2156,28 @@ class BalanceSheetScreen(QtWidgets.QWidget):
 
     def refresh(self) -> None:
         _, as_at = self.period.range()
-        sheet = acc.balance_sheet(as_at)
+        detailed = self.detailed.isChecked()
+        sheet = acc.balance_sheet(as_at, detailed=detailed)
         totals = sheet["totals"]
         self.liability_label.setText(
             f"<b>Liabilities</b> &nbsp; {money(totals['liabilities'])}")
         self.asset_label.setText(f"<b>Assets</b> &nbsp; {money(totals['assets'])}")
-        self.liabilities.load(sheet["liabilities"], numeric=("Amount",))
-        self.assets.load(sheet["assets"], numeric=("Amount",))
+        self.liabilities.load(sheet["liabilities"], numeric=("Amount",),
+                              sortable=not detailed)
+        self.assets.load(sheet["assets"], numeric=("Amount",),
+                         sortable=not detailed)
         self._sides = {"liabilities": sheet["liabilities"],
                        "assets": sheet["assets"]}
         self._lines = [
             f"Liabilities {money(totals['liabilities'])}"
             f"  ·  Assets {money(totals['assets'])}"]
+        if detailed:
+            # Says so on the page and in the export, where someone WILL put a
+            # SUM() down the Amount column and get twice the side.
+            self._lines.append(
+                "Each heading is followed by the accounts that make it up, so "
+                "the Amount column holds both; the side totals above are the "
+                "ones to read.")
         if abs(totals["difference"]) <= acc.EPS:
             self.status.setText("Both sides agree.")
             tone(self.status, "good")
