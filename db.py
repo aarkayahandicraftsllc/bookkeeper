@@ -964,6 +964,72 @@ def add_group(name: str, parent: str, nature: str | None = None) -> int:
         return int(cur.lastrowid)
 
 
+def update_group(group: str, name: str, parent: str | None = None,
+                 nature: str | None = None) -> None:
+    """Alter a custom group: rename it, move it, or change its nature.
+
+    THE RESERVED 27 CANNOT BE TOUCHED. They are the skeleton every report is
+    built on and they are matched BY NAME, not by id - `accounting.LIABILITY_
+    SIDE` and `ASSET_SIDE` decide which side of the balance sheet a balance
+    lands on, `CASH_GROUPS` decides what counts as cash for the voucher rules,
+    and `init_db` reseeds the whole tree if the table is ever empty. Renaming
+    one would not fail; it would silently drop its balances off a statement.
+
+    Moving a group is the point of editing one: its nature follows the new
+    parent unless a nature is given outright, exactly as `add_group` does, so
+    a group dragged under Current Assets starts reporting as an asset rather
+    than keeping whatever it was.
+    """
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("A group needs a name.")
+    groups = get_groups().set_index("name")
+    if group not in groups.index:
+        raise ValueError(f"There is no group called {group!r}.")
+    row = groups.loc[group]
+    if int(row["is_reserved"]):
+        raise ValueError(
+            f"{group!r} is one of the reserved groups. The reports are built "
+            f"on these by name, so they cannot be renamed or moved - create a "
+            f"sub-group under it instead.")
+    gid = int(row["id"])
+
+    if name != group and name in groups.index:
+        raise ValueError(f"There is already a group called {name!r}.")
+
+    if parent is None:
+        parent_row = groups[groups["id"] == row["parent_id"]]
+        parent = str(parent_row.index[0]) if not parent_row.empty else None
+        if parent is None:
+            raise ValueError(f"{group!r} has no parent to keep.")
+    if parent not in groups.index:
+        raise ValueError(f"There is no group called {parent!r}.")
+    new_parent = groups.loc[parent]
+
+    # A group cannot sit under itself or under anything beneath it. Without
+    # this the tree stops being a tree: group_lineage() would walk the loop
+    # (it stops, but reports nonsense) and the balances under it would belong
+    # to no statement at all.
+    if parent == group:
+        raise ValueError(f"{group!r} cannot be put under itself.")
+    lineage = group_lineage(get_groups())
+    if group in lineage.get(int(new_parent["id"]), []):
+        raise ValueError(
+            f"{parent!r} is already under {group!r}, so {group!r} cannot be "
+            f"moved under it.")
+
+    nature = nature or str(new_parent["nature"])
+    if nature not in NATURES:
+        raise ValueError(f"Unknown nature {nature!r}")
+    with connect() as conn:
+        conn.execute(
+            "UPDATE groups SET name = ?, parent_id = ?, nature = ?,"
+            " affects_gross = ? WHERE id = ?",
+            (name, int(new_parent["id"]), nature,
+             int(new_parent["affects_gross"]), gid),
+        )
+
+
 def delete_group(name: str) -> None:
     groups = get_groups().set_index("name")
     if name not in groups.index:
@@ -1065,15 +1131,47 @@ def add_ledger(name: str, group: str, opening: float = 0.0,
 
 def update_ledger(ledger: int, name: str, group: str, opening: float,
                   opening_side: str, notes: str = "", active: bool = True) -> None:
+    """Alter a ledger. Its vouchers are untouched - they point at the id.
+
+    A RESERVED ledger keeps its name and its group. Both are load-bearing:
+    "Cash" and "Profit & Loss A/c" are looked up BY NAME (RESERVED_LEDGERS,
+    and the P&L account the balance sheet carries profit into), and `init_db`
+    recreates a missing Cash on the next open - so renaming it would quietly
+    hand you a second one. Its opening balance and notes are yours to change.
+    """
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("A ledger needs a name.")
     if opening_side not in SIDES:
         raise ValueError("Opening side must be 'Dr' or 'Cr'.")
     if float(opening) < 0:
-        raise ValueError("Enter the opening balance as a positive amount.")
+        raise ValueError("Enter the opening balance as a positive amount and "
+                         "choose Dr or Cr.")
+    gid = group_id(group)
     with connect() as conn:
+        row = conn.execute(
+            "SELECT name, group_id, is_reserved FROM ledgers WHERE id = ?",
+            (int(ledger),)).fetchone()
+        if row is None:
+            raise ValueError("That ledger no longer exists.")
+        if int(row["is_reserved"]):
+            if name != str(row["name"]):
+                raise ValueError(
+                    f"{row['name']} is a reserved ledger, so its name cannot "
+                    f"be changed - the reports look it up by name.")
+            if gid != int(row["group_id"]):
+                raise ValueError(
+                    f"{row['name']} is a reserved ledger and has to stay "
+                    f"under its own group.")
+        # The column is UNIQUE, so without this the rename comes back as a
+        # database IntegrityError rather than something a user can act on.
+        if conn.execute("SELECT 1 FROM ledgers WHERE name = ? AND id <> ?",
+                        (name, int(ledger))).fetchone():
+            raise ValueError(f"There is already a ledger called {name!r}.")
         conn.execute(
             "UPDATE ledgers SET name = ?, group_id = ?, opening = ?,"
             " opening_side = ?, notes = ?, active = ? WHERE id = ?",
-            (name.strip(), group_id(group), round(float(opening), 2), opening_side,
+            (name, gid, round(float(opening), 2), opening_side,
              notes.strip(), 1 if active else 0, int(ledger)),
         )
 
