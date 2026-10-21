@@ -292,6 +292,18 @@ window.voucher.reset()
 check("cancelling clears the edit", window.voucher.editing_id, None)
 
 print("\n10) Creating a ledger through Masters")
+# THE PICK LIST FIRST, because every other check on this screen passes
+# without one: both group boxes are EDITABLE, so `setCurrentText` works
+# perfectly on an empty combo and a lost list is invisible to a test that
+# only ever types into it. That is exactly how the list went missing when
+# `report()` was added to this screen - the refill ended up after a
+# `return` - leaving the user nothing to choose from.
+check("the Under box offers every group to choose from",
+      [window.masters.led_group.itemText(i)
+       for i in range(window.masters.led_group.count())],
+      list(db.get_groups()["name"]))
+check("and a group's own parent box the same",
+      window.masters.grp_parent.count(), len(db.get_groups()))
 window.masters.led_name.setText("Petty Cash")
 window.masters.led_group.setCurrentText("Cash-in-hand")
 window.masters.led_open.setValue(2_500)
@@ -1991,6 +2003,11 @@ settle()
 db.add_group("Scooter Loan", "Loans (Liability)")
 m.refresh()
 settle()
+# A group you have just made has to be offerable, or the only way to file a
+# ledger under it is to type the name out again from memory.
+check("a new group reaches both dropdowns on a refresh",
+      all("Scooter Loan" in [box.itemText(i) for i in range(box.count())]
+          for box in (m.led_group, m.grp_parent)), True)
 grows = {m.group_table.item(r, 0).text(): r
          for r in range(m.group_table.rowCount())}
 m.group_table.setCurrentCell(grows["Scooter Loan"], 0)

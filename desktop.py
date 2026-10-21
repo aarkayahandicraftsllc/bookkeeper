@@ -3561,6 +3561,19 @@ class MastersScreen(QtWidgets.QWidget):
         self._group_names = list(groups["name"])
         # Kept for print and export: exactly what is on the two tabs.
         self._shown = {"Ledgers": view, "Groups": group_view}
+        # THE PICK LISTS MUST BE REFILLED HERE, at the end of the refresh -
+        # this is the only place that fills them, and both boxes are EDITABLE,
+        # so losing the list leaves them looking like working combos with
+        # nothing in them. Keep it inside `refresh`.
+        names = list(groups["name"])
+        for box in (self.led_group, self.grp_parent):
+            current = box.currentText()
+            box.blockSignals(True)
+            box.clear()
+            box.addItems(names)
+            if current in names:
+                box.setCurrentText(current)
+            box.blockSignals(False)
 
     def report(self) -> Report:
         """The chart of accounts: the ledgers, then the groups.
@@ -3583,15 +3596,6 @@ class MastersScreen(QtWidgets.QWidget):
                           "Groups", pd.DataFrame()))],
             notes=[f"{len(self._shown.get('Ledgers', []))} ledgers, "
                    f"{len(self._shown.get('Groups', []))} groups."])
-        names = list(groups["name"])
-        for box in (self.led_group, self.grp_parent):
-            current = box.currentText()
-            box.blockSignals(True)
-            box.clear()
-            box.addItems(names)
-            if current in names:
-                box.setCurrentText(current)
-            box.blockSignals(False)
 
     def _warn(self, exc: Exception) -> None:
         QtWidgets.QMessageBox.warning(self, "Cannot do that", str(exc))
