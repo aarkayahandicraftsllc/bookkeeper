@@ -737,10 +737,27 @@ A report table sizes each column to its contents, except the ones holding
 **names**, which share whatever width is left over. That is what keeps a
 report inside the window instead of scrolling sideways.
 
+**Drag any column header to set a width yourself.** What you drag to is
+remembered **by column name** and **survives a refresh** — the same courtesy
+the chosen sort gets, since posting a voucher should not undo how you arranged
+the report. The columns you have not touched go on being sized by the app.
+
+> Dragging is why the widths are worked out here rather than left to Qt: its
+> own `ResizeToContents` and `Stretch` both size columns well and **neither
+> can be dragged at all**. So the table sizes itself on load and on every
+> resize, and stops doing so for a column once you have taken it over.
+
 Which columns flex is decided by their **shape**, listed in
 `desktop.NARROW_COLUMNS` — a date, a voucher type, a voucher number, a status
-word and a `Balance` all have a known width. Everything else holds a name, or
-a list of names, of no fixed length.
+word, and `Opening` / `Closing` / `Balance` / `Dr/Cr` all have a known width.
+Everything else holds a name, or a list of names, of no fixed length.
+
+There is also a **floor** (`FLEX_CHARS`): a column needing fewer characters
+than that never takes the slack, whatever else is true of it. **That list
+cannot be trusted to be complete** — it was missing `Balance`, and then
+`Dr/Cr` and `Closing`, and each omission put a two-character column on screen
+**385px wide with its contents adrift at the left**. The floor means the next
+column nobody remembered degrades to merely unstretched rather than to absurd.
 
 > **Width cannot make that decision**, which is the trap here. In a book of
 > short ledger names `Date` needs ten characters and `Particulars` eleven, so

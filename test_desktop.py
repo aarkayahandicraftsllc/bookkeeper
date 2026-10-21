@@ -161,47 +161,90 @@ window.refresh_all()
 
 check("day book lists both vouchers", window.daybook.table.rowCount(), 2)
 
-# The two sides are a COLUMN EACH (user asked 2026-10-20), and one of them
-# has to take the table's slack. It used to go to the first non-numeric
-# column - `Date` - which handed a ten-character date 600px while the ledger
-# names beside it were squeezed.
-daybook_header = window.daybook.table.horizontalHeader()
-labels = [window.daybook.table.horizontalHeaderItem(i).text()
-          for i in range(window.daybook.table.columnCount())]
+# The two sides are a COLUMN EACH (user asked 2026-10-20), and they SHARE
+# the table's spare width (2026-10-21: "adjust the column width of Dedit
+# account and credit account so that all columns are visible without
+# scolling"). It used to go to one column alone - at first `Date`, which
+# handed a ten-character date 600px, and then the single widest, which left
+# `Credit account` at 19px while `Debit account` took its full 907px.
+daybook_table = window.daybook.table
+labels = [daybook_table.horizontalHeaderItem(i).text()
+          for i in range(daybook_table.columnCount())]
 check("the day book names both sides in their own columns",
       labels[:3], ["Date", "Debit account", "Credit account"])
-stretched = [labels[i] for i in range(len(labels))
-             if daybook_header.sectionResizeMode(i)
-             == QtWidgets.QHeaderView.Stretch]
+flexible = [labels[i] for i in daybook_table._flexible()]
 check("and the slack goes to the ledger columns, not to Date",
-      [c for c in stretched if c not in ("Debit account", "Credit account")],
+      [c for c in flexible if c not in ("Debit account", "Credit account")],
       [])
-# BOTH of them, as of 2026-10-21 ("adjust the column width of Dedit account
-# and credit account so that all columns are visible without scolling").
-# Stretching only the wider left the other at its full content width - 907px
-# against the stretched one's 19px - and the table scrolled sideways anyway.
-check("BOTH account columns share it", sorted(stretched),
+check("BOTH account columns share it", sorted(flexible),
       ["Credit account", "Debit account"])
-# The full text has to stay reachable, since a stretched column elides.
-accounts = window.daybook.table.item(0, 1)
+# The full text has to stay reachable, since a shared column can be narrower
+# than its contents and Qt elides the overflow.
+accounts = daybook_table.item(0, 1)
 check("an account cell carries its full text as a tooltip",
       accounts.toolTip(), accounts.text())
 
-# A report with ONE long column is unchanged: nothing else comes within half
-# of it, so it alone stretches, exactly as before.
-ledger_header = window.ledger.table.horizontalHeader()
-ledger_labels = [window.ledger.table.horizontalHeaderItem(i).text()
-                 for i in range(window.ledger.table.columnCount())]
-ledger_stretched = [ledger_labels[i] for i in range(len(ledger_labels))
-                    if ledger_header.sectionResizeMode(i)
-                    == QtWidgets.QHeaderView.Stretch]
-check("the ledger still stretches its Particulars alone",
-      ledger_stretched, ["Particulars"])
+# A report with ONE long column gives it to that column alone.
+ledger_table = window.ledger.table
+ledger_labels = [ledger_table.horizontalHeaderItem(i).text()
+                 for i in range(ledger_table.columnCount())]
+ledger_flexible = [ledger_labels[i] for i in ledger_table._flexible()]
+check("the ledger gives its slack to Particulars alone",
+      ledger_flexible, ["Particulars"])
 # The rule is about SHAPE, not width: every column of known shape is sized to
 # its contents however narrow the book's names happen to be.
 check("no column of known shape takes the slack",
-      [c for c in stretched + ledger_stretched
+      [c for c in flexible + ledger_flexible
        if c in desktop.NARROW_COLUMNS], [])
+
+# Masters is where an unlisted column showed up as a defect the user could
+# see: `Dr/Cr` holds two characters and was being handed 385px with its
+# contents adrift at the left (screenshot, 2026-10-21).
+masters_table = window.masters.ledger_table
+masters_labels = [masters_table.horizontalHeaderItem(i).text()
+                  for i in range(masters_table.columnCount())]
+masters_flexible = [masters_labels[i] for i in masters_table._flexible()]
+check("masters shows the columns the screenshot did", masters_labels,
+      ["Ledger", "Under", "Opening", "Dr/Cr", "Closing"])
+check("the figure and side columns take none of it",
+      [c for c in masters_flexible
+       if c in ("Opening", "Dr/Cr", "Closing")], [])
+check("only a name column can", set(masters_flexible) <= {"Ledger", "Under"},
+      True)
+# In THIS book the ledger names are short - "Tractor Loan" is twelve
+# characters, one under the floor - so `Under` carries the slack alone. The
+# figures are what must never carry it.
+drcr = masters_table.columnWidth(masters_labels.index("Dr/Cr"))
+widest = max(masters_table.columnWidth(masters_labels.index(c))
+             for c in masters_flexible)
+check("so Dr/Cr is narrower than the column taking the slack",
+      drcr < widest, True)
+# Sized to its five characters, not to a share of the table: the defect was
+# a two-character column 385px wide.
+check("and sized to what it holds",
+      drcr <= desktop.FLEX_CHARS * masters_table.fontMetrics()
+      .horizontalAdvance("0") + 24, True)
+
+# DRAGGABLE (user asked 2026-10-21: "provide option to malully adjust the
+# column width as well by dragging"). Interactive sections are what allows
+# it - Qt's own ResizeToContents and Stretch cannot be dragged at all.
+check("every column can be dragged",
+      {daybook_table.horizontalHeader().sectionResizeMode(i)
+       for i in range(daybook_table.columnCount())},
+      {QtWidgets.QHeaderView.Interactive})
+# A width the user chose outlives a refresh, the same courtesy the chosen
+# sort already gets.
+daybook_table.horizontalHeader().resizeSection(1, 404)
+check("a dragged width is remembered by COLUMN NAME",
+      daybook_table._widths.get("Debit account"), 404)
+window.daybook.refresh()
+QtWidgets.QApplication.processEvents()      # `settle` is defined further down
+check("and survives a refresh", daybook_table.columnWidth(1), 404)
+check("while the columns around it are still ours to size",
+      daybook_table.columnWidth(0) > 0, True)
+daybook_table._widths.clear()
+window.daybook.refresh()
+QtWidgets.QApplication.processEvents()
 check("trial balance has rows", window.trial.table.rowCount() > 0, True)
 check("trial balance reports agreement",
       "equal credits" in window.trial.status.text(), True)

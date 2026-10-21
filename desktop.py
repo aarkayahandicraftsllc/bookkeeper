@@ -97,10 +97,21 @@ DATE_COLUMNS = ("Date",)
 # Declared rather than guessed, because width cannot tell the two apart - in
 # a book of short ledger names a date needs ten characters and a particulars
 # line eleven. Add a column here only if its content has a known shape.
-# `Balance` is here, not in a `numeric` tuple, because on screen it is TEXT:
-# the ledger carries "102,984.50 Dr", a figure with its side attached. Known
-# shape all the same.
-NARROW_COLUMNS = DATE_COLUMNS + ("Vch Type", "Vch No", "Status", "Balance")
+# `Balance`, `Opening` and `Closing` are here, not in a `numeric` tuple,
+# because on screen they are TEXT: a ledger carries "102,984.50 Dr", a figure
+# with its side attached. Known shape all the same. `Dr/Cr` holds two
+# characters.
+NARROW_COLUMNS = DATE_COLUMNS + ("Vch Type", "Vch No", "Status", "Balance",
+                                 "Opening", "Closing", "Dr/Cr")
+
+# A column needing fewer characters than this is never stretched, whatever
+# else is true of it. THE DECLARATION ABOVE CANNOT BE TRUSTED TO BE COMPLETE
+# - it was missing `Balance`, and then `Dr/Cr` and `Closing`, and each
+# omission put a two-character column on screen 385px wide with its contents
+# adrift at the left (user reported exactly that on Masters, 2026-10-21). A
+# floor means the next column nobody remembered degrades to merely
+# unstretched rather than to absurd.
+FLEX_CHARS = 13
 
 
 def shown_dates(frame: pd.DataFrame) -> pd.DataFrame:
@@ -245,10 +256,21 @@ class FrameTable(QtWidgets.QTableWidget):
         self.setSortingEnabled(False)
         self._sort: tuple[int, QtCore.Qt.SortOrder] | None = None
         self._pinned_last = False
+        # Columns are INTERACTIVE so they can be dragged (user asked
+        # 2026-10-21). That means their widths are ours to work out rather
+        # than Qt's, which `_fit_columns` does - on load and on every resize,
+        # for as long as the user has not taken a column over.
+        self._widths: dict[str, int] = {}     # widths the USER dragged to
+        self._columns: list[str] = []
+        self._numeric: tuple[str, ...] = ()
+        self._needs: list[int] = []
+        self._fitting = False                 # our own resizing, not theirs
         header = self.horizontalHeader()
         header.setSortIndicatorShown(True)
         header.setSectionsClickable(True)
         header.sectionClicked.connect(self.sort_by)
+        header.setSectionResizeMode(QtWidgets.QHeaderView.Interactive)
+        header.sectionResized.connect(self._column_dragged)
 
     def sort_by(self, column: int) -> None:
         """Sort by a column; clicking the same one again reverses it."""
@@ -338,39 +360,103 @@ class FrameTable(QtWidgets.QTableWidget):
             self.sortItems(*self._sort)
             self.horizontalHeader().setSortIndicator(*self._sort)
 
-        header = self.horizontalHeader()
-        header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
-        if len(frame.columns):
-            # The columns with a lot to say SHARE the slack; the rest are
-            # sized to their contents, which for a date, a voucher type or an
-            # amount is a known and modest width.
-            #
-            # Measured in characters, which is enough to choose between
-            # columns; the actual widths are still Qt's.
-            def room_for(index: int) -> int:
-                column = frame.columns[index]
-                if column in numeric:
-                    return -1               # amounts are a known width
-                lengths = [len(str(v)) for v in frame[column]]
-                return max(lengths + [len(str(column))])
+        self._columns = [str(column) for column in frame.columns]
+        self._numeric = tuple(str(column) for column in numeric)
+        self._needs = [self._room_for(frame, column) for column in self._columns]
+        self._fit_columns()
 
-            # WHICH columns flex is decided by their SHAPE, not by how wide
-            # they happen to be in these books. Width cannot tell them
-            # apart: in a book of short ledger names `Date` needs 10
-            # characters and `Particulars` 11, so any "stretch the wide
-            # ones" rule hands a ten-character date the slack - the very bug
-            # this code was written to fix. A date, a voucher type and a
-            # voucher number have a known shape; a ledger name, a list of
-            # them, or a particulars line does not.
-            flexible = [index for index, column in enumerate(frame.columns)
-                        if str(column) not in numeric
-                        and str(column) not in NARROW_COLUMNS]
-            # Nothing but fields of known width: give the slack to the widest
-            # rather than leave a gap down the right-hand side.
-            for index in flexible or [max(range(len(frame.columns)),
-                                          key=room_for)]:
-                header.setSectionResizeMode(
-                    index, QtWidgets.QHeaderView.Stretch)
+    # --- column widths ---------------------------------------------------- #
+    # Sized by us rather than by Qt, because the sections are INTERACTIVE so
+    # that they can be dragged (user asked 2026-10-21). Qt's own
+    # ResizeToContents and Stretch both do a decent job and neither can be
+    # dragged at all.
+    def _room_for(self, frame: pd.DataFrame, column: str) -> int:
+        """How many characters this column needs to show everything it holds."""
+        if column not in frame.columns:
+            return len(column)
+        lengths = [len(_cell_text(value)) for value in frame[column]]
+        return max(lengths + [len(column)])
+
+    def _flexible(self) -> list[int]:
+        """Which columns should absorb the table's spare width.
+
+        Decided by the column's SHAPE, not by how wide it happens to be in
+        these books: width cannot tell them apart, since in a book of short
+        ledger names `Date` needs ten characters and `Particulars` eleven.
+        A date, a voucher type, a voucher number, a figure - all known
+        shapes, all sized to their contents. A ledger name, or a list of
+        them, is not.
+        """
+        candidates = [index for index, column in enumerate(self._columns)
+                      if column not in self._numeric
+                      and column not in NARROW_COLUMNS]
+        # ...and of those, only the ones with enough to say. A column of
+        # names in a book of SHORT names does not need the slack, and taking
+        # it is how a column nobody listed ends up absurdly wide: `Dr/Cr`
+        # holds two characters and was handed 385px on Masters.
+        wide = [index for index in candidates
+                if self._needs[index] >= FLEX_CHARS]
+        if wide:
+            return wide
+        if candidates:
+            # Rather than leave a gap down the right-hand side. Chosen from
+            # the candidates, so a date or a figure can never win it.
+            return [max(candidates, key=lambda index: self._needs[index])]
+        return []
+
+    def _column_dragged(self, index: int, _old: int, new: int) -> None:
+        """Remember a width the USER chose, by column NAME.
+
+        By name rather than by position, because a report can be re-ordered
+        by sorting and reloaded with its columns in a different arrangement -
+        and because a remembered width should follow the column it was meant
+        for.
+        """
+        if self._fitting or index >= len(self._columns):
+            return
+        self._widths[self._columns[index]] = new
+
+    def _fit_columns(self) -> None:
+        """Lay the columns out to fill the table, without scrolling sideways.
+
+        Called on load AND on every resize, because interactive sections do
+        not follow the window by themselves. A column the user has dragged is
+        left exactly where they put it - theirs outranks ours, and keeping it
+        through a refresh is the same courtesy the chosen sort already gets.
+        """
+        if not self._columns:
+            return
+        digit = max(1, self.fontMetrics().horizontalAdvance("0"))
+        padding = digit * 3
+        natural = [need * digit + padding for need in self._needs]
+        flexible = set(self._flexible())
+        floor = digit * 10
+
+        spare = self.viewport().width() - sum(
+            natural[index] for index in range(len(self._columns))
+            if index not in flexible)
+        share = sum(natural[index] for index in flexible)
+
+        self._fitting = True
+        try:
+            for index, column in enumerate(self._columns):
+                if column in self._widths:
+                    self.setColumnWidth(index, self._widths[column])
+                    continue
+                if index not in flexible:
+                    self.setColumnWidth(index, natural[index])
+                    continue
+                # Shared in proportion to how much each has to say, so two
+                # account columns come out alike and a long particulars line
+                # outweighs a short one.
+                wanted = (spare * natural[index] / share) if share else spare
+                self.setColumnWidth(index, max(floor, int(wanted)))
+        finally:
+            self._fitting = False
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit_columns()
 
 
 def mono_font() -> QtGui.QFont:
