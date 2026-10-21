@@ -416,12 +416,37 @@ Balances are held **debit-positive** internally: `+500` is 500 Dr, `-500` is
 | --- | --- |
 | **Voucher Entry** | Type, date, auto number, narration, then a Dr/Cr grid with ledger autocomplete and running totals. Accept is disabled until the two sides agree. **Copy** repeats a voucher without retyping it. |
 | **Day Book** | Every voucher in the period, newest first, with **Debit account** and **Credit account** as separate columns. Double-click to alter one. Printed and exported **line by line**. |
-| **Ledger** | One account: opening balance, every entry with **To**/**By** particulars naming the other side, a running balance, closing. Double-click an entry to alter that voucher. |
+| **Ledger** | One account: opening balance, every entry with **To**/**By** particulars naming the other side, a running balance, closing. Double-click an entry to alter that voucher, or tick **Month by month** for a row per month. |
 | **Trial Balance** | Closing balances as Dr and Cr, by ledger or summarised by group, with or without **accounts standing at nil**. The total is a bar under the table, so the table itself can be sorted. **Double-click an account to read its ledger.** |
 | **Profit & Loss** | Trading account → gross profit, then the indirect accounts → net profit. |
 | **Balance Sheet** | Liabilities and assets side by side, with net profit carried to Profit & Loss A/c. Summary, or **the accounts under each heading**. |
 | **Masters** | Create and alter ledgers and sub-groups. |
 | **Company** | Who the books belong to: name, address, PAN, GSTIN, TAN, CIN, financial year, currency. |
+
+### An account month by month
+
+Tick **Month by month** on the Ledger and the table becomes a row per month —
+what moved in it, and where the account stood after it. **Double-click a month
+to see only that month**, which is this same screen with its dates narrowed to
+it. Drilling in from the **Trial Balance** lands here rather than on the
+entries: a closing balance tells you where an account ended up, and the months
+are how you find the one that explains it.
+
+It lives on the Ledger rather than on a screen of its own because everything it
+needs is already there — the account, the period, the opening and closing,
+print and export. The Balance Sheet's summary/detailed tick is the same idea.
+
+Two details:
+
+* **Quiet months are listed too.** A month with nothing in it answers "when did
+  this stop moving?", and a table that skips it makes the reader count dates to
+  notice.
+* **Each row carries its own first and last day** as the row's key, so clicking
+  one asks for exactly that month without re-deriving which days it covers —
+  a month is not thirty days, and February is not always the same length.
+
+The months must account for the whole movement and close where the account
+closes; both are asserted.
 
 ### The exported Day Book is line by line
 
@@ -448,7 +473,7 @@ Double-click is "show me what is behind this line", and it goes the same way
 on every report that has something behind it:
 
 * **Day Book** or **Ledger** → the voucher, opened for alteration.
-* **Trial Balance** → that account's **Ledger**.
+* **Trial Balance** → that account's **Ledger**, **month by month**.
 * **Balance Sheet**, showing the accounts under each heading → that account's
   **Ledger**, from either side.
 * **Profit & Loss** → that account's **Ledger**, from any of its four tables.
