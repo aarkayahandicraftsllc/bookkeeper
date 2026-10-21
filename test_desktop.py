@@ -2408,6 +2408,61 @@ check("the trial balance prints plain",
       "&nbsp;" in desktop.report_html(window.trial.report(), company="Probe"),
       False)
 
+print("\n23m) Double-click an account on the Profit & Loss too")
+# Asked 2026-10-21: "diuble click functionality in profit and loss as well".
+# Every row of a profit and loss account is a ledger, so there are no
+# headings to tell apart - but there are FOUR tables, and the period is a
+# SPAN, which the ledger has to be drawn over or it will not add up to the
+# figure that was clicked.
+pl = window.profit
+window.show_screen(4)
+pl.period.year_box.setCurrentText(desktop.PeriodBar.SINCE)
+pl.refresh()
+settle()
+tables = {"trading expenses": pl.trading_expense,
+          "trading incomes": pl.trading_income,
+          "indirect expenses": pl.indirect_expense,
+          "indirect incomes": pl.indirect_income}
+filled = {where: table for where, table in tables.items()
+          if table.rowCount() and table.key_at(0) is not None}
+check("at least one side of the P&L has accounts on it", bool(filled), True)
+
+where, table = sorted(filled.items())[0]
+account = str(table.key_at(0))
+shown = float(table.item(0, table.columnCount() - 1).text().replace(",", ""))
+table.doubleClicked.emit(table.model().index(0, 0))
+settle()
+check(f"double-clicking in the {where} opens the Ledger",
+      window.stack.currentIndex(), 2)
+check("on that account", window.ledger.ledger_box.currentText(), account)
+check("drawn over the P&L's own period, since books began",
+      window.ledger.period.range(), pl.period.range())
+# The movement on that ledger over this period IS the figure clicked.
+statement = acc.ledger_statement(db.ledger_id(account),
+                                 *window.ledger.period.range())
+moved = round(abs(statement["debit_total"] - statement["credit_total"]), 2)
+check("and the ledger's movement is the figure that was pointed at",
+      moved, round(shown, 2))
+
+# All four tables are wired, and a double-click on a side with nothing on it
+# does nothing rather than raising - the lambda runs, finds no key and
+# returns. Emitting on each is what proves the connection exists.
+window.show_screen(4)
+settle()
+for where, table in tables.items():
+    table.doubleClicked.emit(table.model().index(0, 0))
+    settle()
+    if table.rowCount() and table.key_at(0) is not None:
+        check(f"the {where} table drills down", window.stack.currentIndex(), 2)
+        window.show_screen(4)
+        settle()
+    else:
+        check(f"an empty {where} table does nothing, and does not raise",
+              window.stack.currentIndex(), 4)
+window.profit.period.year_box.setCurrentText(
+    f"FY {acc.current_financial_year().label}")
+settle()
+
 print("\n23k) Abandoning an alteration goes back to the report")
 # Asked 2026-10-21: "while i am in ledger an double click on an entry to view
 # and click on cancel edit it land on voucher entry page instead it should

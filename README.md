@@ -432,15 +432,20 @@ on every report that has something behind it:
 * **Trial Balance** → that account's **Ledger**.
 * **Balance Sheet**, showing the accounts under each heading → that account's
   **Ledger**, from either side.
+* **Profit & Loss** → that account's **Ledger**, from any of its four tables.
+  Every row there is already an account, so there is nothing to tick first.
 
 Two details that are easy to get wrong and are worth knowing:
 
-* **The period travels with you.** The figure you clicked on the trial balance
-  is a balance *as at* its date, so the ledger opens drawn **to that same
-  date** — it closes on the number you just pointed at, which is the only
-  reason to drill into it. The start comes from the financial year that date
-  falls in, because a year of movement is the context you want behind a
-  closing balance.
+* **The period travels with you**, and each report hands over its own.
+  A figure on the trial balance or the balance sheet is a balance *as at*
+  their date, so the ledger opens drawn **to that same date** — it closes on
+  the number you just pointed at, which is the only reason to drill into it.
+  The start comes from the financial year that date falls in, because a year
+  of movement is the context you want behind a closing balance. A figure on
+  the **Profit & Loss** is movement **over a span**, so the ledger opens over
+  that same span, where its debits less its credits come to exactly the
+  figure you clicked.
 * **Finishing with a voucher puts you back where you came from** — whether you
   *accept* the alteration or *abandon* it. Giving up on an alteration used to
   leave you on an empty entry form, with the report you were reading to find
