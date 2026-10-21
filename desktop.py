@@ -88,6 +88,20 @@ def money(value: float) -> str:
 # books' own format, so a column named any of these is formatted there.
 DATE_COLUMNS = ("Date",)
 
+# Columns whose width is settled by WHAT THEY HOLD rather than by how much
+# there is of it: a date, a voucher type, a voucher number, a status word.
+# Those are sized to their contents; every other text column holds a name or
+# a list of them, of no fixed length, and shares the table's spare width
+# instead of forcing the table wider than the window.
+#
+# Declared rather than guessed, because width cannot tell the two apart - in
+# a book of short ledger names a date needs ten characters and a particulars
+# line eleven. Add a column here only if its content has a known shape.
+# `Balance` is here, not in a `numeric` tuple, because on screen it is TEXT:
+# the ledger carries "102,984.50 Dr", a figure with its side attached. Known
+# shape all the same.
+NARROW_COLUMNS = DATE_COLUMNS + ("Vch Type", "Vch No", "Status", "Balance")
+
 
 def shown_dates(frame: pd.DataFrame) -> pd.DataFrame:
     """A COPY of ``frame`` with its date columns in the books' own format.
@@ -299,6 +313,13 @@ class FrameTable(QtWidgets.QTableWidget):
                     # Case-folded, or ASCII puts every capital before every
                     # lower-case letter and the order looks arbitrary.
                     item = _Cell(text, text.casefold())
+                    # A stretched column can be narrower than its contents,
+                    # and Qt elides what does not fit. The tooltip is what
+                    # keeps the full text reachable - "Cash / Deepa Gupta /
+                    # ..." must not become unrecoverable because the window
+                    # is narrow.
+                    if text:
+                        item.setToolTip(text)
                 if (bold_last and row == len(frame) - 1) or row in headings:
                     font = item.font()
                     font.setBold(True)
@@ -320,13 +341,12 @@ class FrameTable(QtWidgets.QTableWidget):
         header = self.horizontalHeader()
         header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
         if len(frame.columns):
-            # One column takes the slack, and it has to be the one with the
-            # most to say. This used to pick the FIRST non-numeric column,
-            # which on the Day Book and the Ledger is `Date` - so a fixed
-            # ten-character date was handed 600px of stretch while the ledger
-            # names beside it were squeezed to fit. Measured in characters,
-            # which is enough to choose between columns; the actual widths
-            # are still Qt's.
+            # The columns with a lot to say SHARE the slack; the rest are
+            # sized to their contents, which for a date, a voucher type or an
+            # amount is a known and modest width.
+            #
+            # Measured in characters, which is enough to choose between
+            # columns; the actual widths are still Qt's.
             def room_for(index: int) -> int:
                 column = frame.columns[index]
                 if column in numeric:
@@ -334,9 +354,23 @@ class FrameTable(QtWidgets.QTableWidget):
                 lengths = [len(str(v)) for v in frame[column]]
                 return max(lengths + [len(str(column))])
 
-            header.setSectionResizeMode(
-                max(range(len(frame.columns)), key=room_for),
-                QtWidgets.QHeaderView.Stretch)
+            # WHICH columns flex is decided by their SHAPE, not by how wide
+            # they happen to be in these books. Width cannot tell them
+            # apart: in a book of short ledger names `Date` needs 10
+            # characters and `Particulars` 11, so any "stretch the wide
+            # ones" rule hands a ten-character date the slack - the very bug
+            # this code was written to fix. A date, a voucher type and a
+            # voucher number have a known shape; a ledger name, a list of
+            # them, or a particulars line does not.
+            flexible = [index for index, column in enumerate(frame.columns)
+                        if str(column) not in numeric
+                        and str(column) not in NARROW_COLUMNS]
+            # Nothing but fields of known width: give the slack to the widest
+            # rather than leave a gap down the right-hand side.
+            for index in flexible or [max(range(len(frame.columns)),
+                                          key=room_for)]:
+                header.setSectionResizeMode(
+                    index, QtWidgets.QHeaderView.Stretch)
 
 
 def mono_font() -> QtGui.QFont:

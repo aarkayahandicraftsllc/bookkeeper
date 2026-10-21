@@ -173,12 +173,35 @@ check("the day book names both sides in their own columns",
 stretched = [labels[i] for i in range(len(labels))
              if daybook_header.sectionResizeMode(i)
              == QtWidgets.QHeaderView.Stretch]
-# WHICH of the two it is depends on the ledger names in the book, so only
-# that it is one of them is asserted - the defect was that it was neither.
-check("and the slack goes to a ledger column, not to Date",
+check("and the slack goes to the ledger columns, not to Date",
       [c for c in stretched if c not in ("Debit account", "Credit account")],
       [])
-check("exactly one column takes it", len(stretched), 1)
+# BOTH of them, as of 2026-10-21 ("adjust the column width of Dedit account
+# and credit account so that all columns are visible without scolling").
+# Stretching only the wider left the other at its full content width - 907px
+# against the stretched one's 19px - and the table scrolled sideways anyway.
+check("BOTH account columns share it", sorted(stretched),
+      ["Credit account", "Debit account"])
+# The full text has to stay reachable, since a stretched column elides.
+accounts = window.daybook.table.item(0, 1)
+check("an account cell carries its full text as a tooltip",
+      accounts.toolTip(), accounts.text())
+
+# A report with ONE long column is unchanged: nothing else comes within half
+# of it, so it alone stretches, exactly as before.
+ledger_header = window.ledger.table.horizontalHeader()
+ledger_labels = [window.ledger.table.horizontalHeaderItem(i).text()
+                 for i in range(window.ledger.table.columnCount())]
+ledger_stretched = [ledger_labels[i] for i in range(len(ledger_labels))
+                    if ledger_header.sectionResizeMode(i)
+                    == QtWidgets.QHeaderView.Stretch]
+check("the ledger still stretches its Particulars alone",
+      ledger_stretched, ["Particulars"])
+# The rule is about SHAPE, not width: every column of known shape is sized to
+# its contents however narrow the book's names happen to be.
+check("no column of known shape takes the slack",
+      [c for c in stretched + ledger_stretched
+       if c in desktop.NARROW_COLUMNS], [])
 check("trial balance has rows", window.trial.table.rowCount() > 0, True)
 check("trial balance reports agreement",
       "equal credits" in window.trial.status.text(), True)

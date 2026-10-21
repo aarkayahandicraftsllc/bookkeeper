@@ -731,6 +731,30 @@ runs on the *native* platform rather than offscreen on purpose: Light keeps the
 native widget style, and offscreen would render it as Fusion — that is, not the
 thing being judged.
 
+## Column widths
+
+A report table sizes each column to its contents, except the ones holding
+**names**, which share whatever width is left over. That is what keeps a
+report inside the window instead of scrolling sideways.
+
+Which columns flex is decided by their **shape**, listed in
+`desktop.NARROW_COLUMNS` — a date, a voucher type, a voucher number, a status
+word and a `Balance` all have a known width. Everything else holds a name, or
+a list of names, of no fixed length.
+
+> **Width cannot make that decision**, which is the trap here. In a book of
+> short ledger names `Date` needs ten characters and `Particulars` eleven, so
+> any "stretch the widest" rule eventually hands a ten-character date the
+> slack. An earlier version did exactly that, and the version after it
+> stretched only the *single* widest column — which on the Day Book meant
+> `Credit account` was crushed to **19px** while `Debit account` took its full
+> **907px** and the table scrolled anyway.
+
+Because a shared column can be narrower than its contents, Qt elides what does
+not fit — so every text cell carries its **full text as a tooltip**. A side
+touching several ledgers reads `Cash / Deepa Gupta / …` and must not become
+unrecoverable because the window is narrow.
+
 ## Sorting a report
 
 **Click a column header** to sort by it; click the same one again to reverse
