@@ -811,7 +811,6 @@ def _export_csv(report: Report, target: Path) -> None:
                 writer.writerow([note])
 
 
-# Column widths for the two-sided sheet: a ledger name, a figure, a gutter.
 # --------------------------------------------------------------------------- #
 # the look of an exported workbook
 # --------------------------------------------------------------------------- #
