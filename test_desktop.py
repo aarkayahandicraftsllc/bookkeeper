@@ -1108,48 +1108,118 @@ for index, title in REPORTS.items():
     # else keeps a sheet per table.
     check(f"{title}: the workbook is laid out as the report asks",
           len(book.sheetnames),
-          1 if report.side_by_side else len(report.sections))
+          # A two-sided statement is one sheet, plus the cover page the
+          # supplied template opens with.
+          2 if report.two_sided else len(report.sections))
     check(f"{title}: each sheet is headed with the company",
-          book[book.sheetnames[0]]["A1"].value, db.company_display_name())
+          book[book.sheetnames[-1]]["B2"].value, db.company_display_name())
     book.close()
 
-# The balance sheet exports as ONE sheet, read left and right (user asked
-# 2026-10-20: "not in 2 seperate sheets, it should be in one sheet and looks
-# more professional"). Two sheets meant holding one side in your head while
-# looking at the other.
+# The balance sheet exports in the shape of the template the user supplied
+# 2026-10-21 ("i want balance sheet output in this format"): a cover page,
+# then ONE stacked statement - Assets, then Liabilities - with the groups
+# indented under each side and the accounts indented again. This replaced the
+# side-by-side layout asked for on 2026-10-20; the user was shown both and
+# chose the template's shape.
 window.show_screen([n for n, _ in window.screens].index("Balance Sheet"))
+window.sheet.detailed.setChecked(True)
+window.sheet.refresh()
 settle()
-sides_path = db.DATA_DIR / "sides.xlsx"
-desktop.export_report(window.sheet.report(), path=str(sides_path))
+statement_report = window.sheet.report()
+sides_path = db.DATA_DIR / "statement.xlsx"
+desktop.export_report(statement_report, path=str(sides_path))
 book = openpyxl.load_workbook(sides_path)
-sides = book[book.sheetnames[0]]
-check("one sheet, not one per side", len(book.sheetnames), 1)
-check("headed with the company", sides["A1"].value, db.company_display_name())
-check("then what the report is", sides["A2"].value, "Balance Sheet")
-check("then when it is drawn at", "as at" in str(sides["A3"].value), True)
-check("the two sides sit beside each other",
-      [sides["A5"].value, sides["D5"].value], ["Liabilities", "Assets"])
-check("with a figures column each",
-      [sides["B5"].value, sides["E5"].value], ["Amount", "Amount"])
-totals_at = [r for r in range(1, sides.max_row + 1)
-             if sides.cell(row=r, column=1).value == "Total"]
-check("each side is ruled off and totalled", len(totals_at), 1)
-check("and the totals agree with the statement",
-      [sides.cell(row=totals_at[0], column=c).value for c in (2, 5)],
-      [window.sheet.report().totals["Liabilities"],
-       window.sheet.report().totals["Assets"]])
-check("the total is emphasised",
-      sides.cell(row=totals_at[0], column=1).font.bold, True)
-# Still numbers with a format, never formatted text - the layout got smarter,
-# the principle did not change.
-# int, not float, when the figure is whole - openpyxl narrows it on the way
-# back in. What matters is that it is a NUMBER and not text.
+check("a cover page, then the statement", book.sheetnames,
+      ["Cover Page", "Balance Sheet"])
+
+cover = book["Cover Page"]
+check("the cover names the report", cover["C11"].value, "Balance Sheet")
+check("and whose books it is", cover["C12"].value, db.company_display_name())
+check("its contents are clickable, not decoration",
+      cover["C17"].value == "Balance Sheet"
+      and cover["C17"].hyperlink is not None, True)
+
+sides = book["Balance Sheet"]
+check("the statement is headed with the company",
+      sides["B2"].value, db.company_display_name())
+check("then what the report is", sides["B3"].value, "Balance Sheet")
+check("then when it is drawn at", "as at" in str(sides["B4"].value), True)
+# The column header carries the DATE only - the period also mentions that the
+# accounts are shown, which belongs in the title block and would run three
+# columns wide here.
+check("the figures column is headed with the date alone",
+      sides["C5"].value, "As at " + db.show_date(window.sheet.period.range()[1]))
+
+# Read the statement back as (indent, label, figure).
+lines = []
+for r in range(6, sides.max_row + 1):
+    label = sides.cell(row=r, column=2).value
+    if label is None:
+        continue
+    lines.append((int(sides.cell(row=r, column=2).alignment.indent or 0),
+                  str(label), sides.cell(row=r, column=3).value, r))
+labels = [label for _, label, _, _ in lines]
+check("ASSETS leads, the way the template lays it out",
+      labels.index("Assets") < labels.index("Liabilities"), True)
+check("a side header carries no indent",
+      [i for i, label, _, _ in lines if label in ("Assets", "Liabilities")],
+      [0, 0])
+check("groups are indented under it, accounts indented again",
+      sorted({i for i, _, _, _ in lines}), [0, 1, 2])
+
+# Each side's total is handed over, emphasised, and ruled the way a
+# statement's total is.
+for side in ("Assets", "Liabilities"):
+    row = next(r for _, label, _, r in lines if label == f"Total {side}")
+    cell = sides.cell(row=row, column=3)
+    check(f"Total {side} agrees with the statement",
+          cell.value, statement_report.totals[side])
+    check(f"Total {side} is emphasised and ruled",
+          (cell.font.bold, cell.border.top.style, cell.border.bottom.style),
+          (True, "thin", "double"))
+
+# THE ARITHMETIC: a group's own total is the sum of the accounts above it.
+# This is what the layout buys - the heading no longer carries a figure, so
+# the column adds up instead of double-counting.
+running, checked = [], 0
+for indent, label, value, _ in lines:
+    if indent == 2:
+        running.append(float(value or 0))
+    elif label.startswith("Total ") and running:
+        if label not in ("Total Assets", "Total Liabilities"):
+            check(f"{label} is the sum of its accounts",
+                  round(float(value or 0), 2), round(sum(running), 2))
+            checked += 1
+        running = []
+check("and there were groups to check", checked > 0, True)
+
+# Still numbers with a format, never formatted text.
+figures = [v for i, _, v, _ in lines if i == 2 and v is not None]
 check("amounts are numbers",
-      isinstance(sides["B6"].value, (int, float))
-      and not isinstance(sides["B6"].value, bool), True)
-check("carrying a money format", sides["B6"].number_format, "#,##0.00")
+      all(isinstance(v, (int, float)) and not isinstance(v, bool)
+          for v in figures), True)
+check("carrying a money format",
+      {sides.cell(row=r, column=3).number_format
+       for i, _, v, r in lines if i == 2 and v is not None},
+      {desktop.EXCEL_MONEY})
 check("and the gridlines are off", sides.sheet_view.showGridLines, False)
+check("with the heading frozen above the statement", sides.freeze_panes, "A6")
 book.close()
+
+# The CSV describes the same statement, so the two do not disagree.
+csv_path = db.DATA_DIR / "statement.csv"
+desktop.export_report(statement_report, path=str(csv_path))
+csv_lines = csv_path.read_text(encoding="utf-8-sig").splitlines()
+check("the CSV is stacked too, Assets first",
+      [n for n, line in enumerate(csv_lines) if line.startswith("Assets")][0]
+      < [n for n, line in enumerate(csv_lines)
+         if line.startswith("Liabilities")][0], True)
+check("and carries both side totals",
+      all(any(line.startswith(f"Total {side}") for line in csv_lines)
+          for side in ("Assets", "Liabilities")), True)
+window.sheet.detailed.setChecked(False)
+window.sheet.refresh()
+settle()
 
 # Figures stay NUMBERS in a spreadsheet so they can be summed on arrival; a
 # column of "1,234.00" strings is a file you have to repair before using.
