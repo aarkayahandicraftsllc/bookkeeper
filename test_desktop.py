@@ -1646,13 +1646,13 @@ voucher._ask_delete = lambda: "keep"
 voucher.delete_voucher()
 check("backing out of the delete keeps it", db.get_voucher(vid) is None, False)
 
-number_before = db.next_voucher_number("Journal")
+number_before = db.next_voucher_number()
 voucher.load_voucher(vid)
 voucher._ask_delete = lambda: "delete"
 voucher.delete_voucher()
 check("deleting for good removes it", db.get_voucher(vid) is None, True)
 check("and gives the number up",
-      db.next_voucher_number("Journal"), number_before - 1)
+      db.next_voucher_number(), number_before - 1)
 QtWidgets.QMessageBox.question = _real_question
 voucher.reset()
 
@@ -1720,7 +1720,7 @@ source_id = db.last_voucher_id(kind)
 head, lines = db.get_voucher(source_id)
 expected = [(str(ln["ledger_name"]), float(ln["debit"]), float(ln["credit"]))
             for ln in lines]
-next_number = db.next_voucher_number(kind)
+next_number = db.next_voucher_number()
 
 v.copy_voucher()
 settle()
@@ -1737,7 +1737,7 @@ check("the narration came too", v.narration.text(), str(head["narration"]))
 check("and the grid still has exactly one spare line",
       v.grid.rowCount(), len(expected) + 1)
 check("nothing is saved until you accept it",
-      db.next_voucher_number(kind), next_number)
+      db.next_voucher_number(), next_number)
 
 # There has to be a way OUT of a copy. Until 2026-10-20 the only button was
 # Accept: the form was full and could not be emptied (user: "there is no
@@ -1748,7 +1748,7 @@ check("worded for a copy, not for an edit",
 v.cancel_button.click()
 settle()
 check("discarding it empties the form", v.row_values(), [])
-check("and writes nothing", db.next_voucher_number(kind), next_number)
+check("and writes nothing", db.next_voucher_number(), next_number)
 check("the way out goes away with it", v.cancel_button.isHidden(), True)
 
 v.copy_voucher()
@@ -1756,7 +1756,7 @@ settle()
 v.accept_voucher()
 settle()
 check("accepting a copy posts it, so the type has one more voucher",
-      db.next_voucher_number(kind), next_number + 1)
+      db.next_voucher_number(), next_number + 1)
 made = db.last_voucher_id(kind)
 check("and the voucher it was copied FROM is untouched",
       db.get_voucher(source_id)[0]["number"], head["number"])

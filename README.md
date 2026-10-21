@@ -612,6 +612,30 @@ credit cash or bank, a Receipt should debit it, a Contra should be between two
 of them, a Journal should touch neither. You get told, not blocked, because
 real books occasionally need the exception.
 
+## Voucher numbers
+
+**One sequence for the book, whatever the voucher type.** Enter a Payment,
+then a Receipt, then a Contra, and they are numbered 1, 2, 3.
+
+> It was a sequence **per type** until 2026-10-21, which let a book hold a
+> Contra 2, a Payment 2 *and* a Receipt 2 — and the real books held **42
+> numbers shared by two or three vouchers apiece**, so "voucher no. 2" named
+> three different vouchers. Existing books are **renumbered into one sequence
+> when they are next opened**, oldest first, by a `_migrate` step recorded in
+> the settings so it runs exactly once.
+
+The next number is `MAX + 1`, so **deleting the newest voucher frees its
+number again, while a gap in the middle stays a gap.** Closing the gap by
+renumbering everything after it was offered and declined: a number that goes
+on pointing at the voucher it always pointed at is worth more than an unbroken
+series, since anything printed or filed earlier still has to match.
+
+> Renumbering in place needs **two passes**, and that is not optional: the
+> table carries `UNIQUE (voucher_type, number)`, so assigning a number that
+> another voucher of the same type still holds trips over itself. The first
+> pass parks every number in the negatives, where nothing can collide, and the
+> second lays down the real ones.
+
 ## Voiding a voucher, and deleting one
 
 Two different things, and the difference is the voucher **number**.

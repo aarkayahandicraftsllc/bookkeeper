@@ -115,14 +115,19 @@ for label, lines in [
     except ValueError:
         check(label, "rejected", "rejected")
 
-print("\n4) Voucher numbering runs per type")
-check("first payment is 1", db.next_voucher_number("Payment"), 1)
+print("\n4) Voucher numbering runs in ONE sequence, whatever the type")
+# Asked 2026-10-21: "voucher number should not be seperate by voucher type
+# keep them in sequence". It was a sequence per type, which let a book hold
+# a Contra 2, a Payment 2 and a Receipt 2 - and the real books held 42 such
+# collisions, so "voucher no. 2" named three different vouchers.
+check("the first voucher is 1", db.next_voucher_number(), 1)
 post("Payment", 5, "April rent", ("Rent", 30_000, 0), ("Bank of India", 0, 30_000))
-check("next payment is 2", db.next_voucher_number("Payment"), 2)
-check("receipts number separately", db.next_voucher_number("Receipt"), 1)
+check("the next is 2", db.next_voucher_number(), 2)
 post("Payment", 6, "Freight", ("Freight Inward", 5_000, 0), ("Cash", 0, 5_000))
-check("second payment numbered 2",
-      int(db.get_vouchers(voucher_type="Payment")["number"].min()), 1)
+check("and the next is 3, so nothing restarts", db.next_voucher_number(), 3)
+# The cross-type assertions wait until section 5 has posted a Sales, a
+# Receipt and a Purchase - adding a voucher of my own here would shift every
+# hand-worked figure in the rest of this suite.
 
 print("\n5) Trading and indirect entries")
 # credit sale to Acme, part received
@@ -137,6 +142,18 @@ post("Receipt", 11, "Bank interest",
      ("Bank of India", 2_000, 0), ("Interest Received", 0, 2_000))
 post("Contra", 12, "Cash drawn from bank",
      ("Cash", 20_000, 0), ("Bank of India", 0, 20_000))
+
+# Now that a Payment, a Sales, a Receipt, a Purchase and a Contra are all in
+# the book, the ONE sequence can be asserted properly (asked 2026-10-21).
+posted = db.get_vouchers().sort_values("id")
+check("every type carries on the same sequence",
+      list(posted["number"]), list(range(1, len(posted) + 1)))
+check("so no number is used twice in the book",
+      len(set(posted["number"])), len(posted))
+check("across five different voucher types",
+      len(set(posted["voucher_type"])) >= 5, True)
+check("and the next one carries on from the last",
+      db.next_voucher_number(), len(posted) + 1)
 
 print("\n6) Ledger balances")
 bal = acc.balances().set_index("ledger")
@@ -773,7 +790,7 @@ numbered = int(db.get_voucher(vid)[0]["number"])
 balances = acc.balances().set_index("ledger")
 check("the voucher posts while it is live",
       float(balances.loc["Void Test Expense", "closing"]), 7_500.0)
-next_before = db.next_voucher_number("Payment")
+next_before = db.next_voucher_number()
 
 db.void_voucher(vid)
 check("it reads back as voided", db.is_voided(vid), True)
@@ -798,7 +815,7 @@ check("and the net profit is exactly what it was before the voucher",
 
 # The point of voiding rather than deleting: the number stays spent.
 check("its number is NOT handed to the next voucher",
-      db.next_voucher_number("Payment"), next_before)
+      db.next_voucher_number(), next_before)
 book = acc.day_book()
 row = book[book["voucher_id"] == vid]
 check("it is still listed in the Day Book", len(row), 1)
@@ -852,9 +869,15 @@ with closing(sqlite3.connect(legacy)) as old, old:
     old.executescript(db.SCHEMA)
 legacy_sql("ALTER TABLE vouchers DROP COLUMN voided",
            "ALTER TABLE vouchers DROP COLUMN voided_at",
+           # Numbered the OLD way, per type - so three vouchers call
+           # themselves number 1 and two call themselves number 2, which is
+           # exactly what the real books held 42 times over.
            "INSERT INTO vouchers (voucher_type, number, voucher_date,"
-           " narration, created_at) VALUES ('Journal', 1, '2026-04-01',"
-           " 'legacy', '2026-04-01')",
+           " narration, created_at) VALUES"
+           " ('Journal', 1, '2026-04-01', 'legacy', '2026-04-01'),"
+           " ('Payment', 1, '2026-04-02', 'legacy', '2026-04-02'),"
+           " ('Receipt', 1, '2026-04-03', 'legacy', '2026-04-03'),"
+           " ('Payment', 2, '2026-04-04', 'legacy', '2026-04-04')",
            # ...and it holds its address the old way, in one multi-line box.
            "INSERT INTO settings (key, value) VALUES"
            " ('company_name', 'Old Books'),"
@@ -870,7 +893,29 @@ columns, rows = legacy_sql("PRAGMA table_info(vouchers)",
 columns = {r[1] for r in columns}
 check("opening it adds the column", "voided" in columns, True)
 check("and every existing voucher is live, not voided",
-      [r[0] for r in rows], [0])
+      [r[0] for r in rows], [0, 0, 0, 0])
+
+# Numbers were per TYPE until 2026-10-21 and are now one sequence, so the
+# vouchers already in an older book are renumbered into it - oldest first.
+# The user was offered leaving the history alone and chose this, because the
+# duplicates made "voucher no. 1" the name of three different vouchers.
+numbered = legacy_sql(
+    "SELECT voucher_type, number FROM vouchers ORDER BY voucher_date, id")[0]
+check("the old per-type numbers are renumbered into one sequence",
+      [row[1] for row in numbered], [1, 2, 3, 4])
+check("in date order, so the series reads as the book was written",
+      [row[0] for row in numbered],
+      ["Journal", "Payment", "Receipt", "Payment"])
+check("and it is recorded as done, so it runs exactly once",
+      dict(legacy_sql("SELECT key, value FROM settings")[0])
+      .get(db.VOUCHER_NUMBERING), "sequence")
+# Run it again having DELETED one: the step must not renumber a second time,
+# or a gap the user chose to keep would be closed behind their back.
+legacy_sql("DELETE FROM vouchers WHERE number = 2")
+db.init_db()
+check("a later open leaves the numbers alone",
+      [row[0] for row in legacy_sql(
+          "SELECT number FROM vouchers ORDER BY number")[0]], [1, 3, 4])
 
 # A settings key dropped from COMPANY_FIELDS stays in the FILE; it just stops
 # being read. So the old address has to be moved, or it is invisible but

@@ -252,7 +252,7 @@ def voucher_editor(prefix: str = "vch", existing: dict | None = None,
                    else date.today()),
             format=DATE_FMT.streamlit, key=k("date"))
         number = (int(existing["number"]) if existing
-                  else db.next_voucher_number(voucher_type))
+                  else db.next_voucher_number())
         st.caption(f"Voucher No. **{number}**")
     with head3:
         narration = st.text_input(

@@ -2042,7 +2042,7 @@ class VoucherScreen(QtWidgets.QWidget):
     def _type_changed(self, name: str) -> None:
         if self.editing_id is None:
             self.number_label.setText(
-                f"No. {db.next_voucher_number(name)}")
+                f"No. {db.next_voucher_number()}")
         self.hint.setText(db.VOUCHER_TYPES.get(name, ""))
         # Both the label and whether it is enabled depend on the type, and
         # every path that changes the type or resets the form comes through

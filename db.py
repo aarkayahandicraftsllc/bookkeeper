@@ -294,6 +294,11 @@ UPPER_FIELDS = ("pan", "gstin", "tan", "cin")
 # until 2026-10-20; _migrate() moves an old one across.
 ADDRESS_LINES = ("address1", "address2", "address3")
 
+# Marks a book whose vouchers have been renumbered into one sequence, so the
+# migration that does it runs exactly once. Settings keys are how this
+# project records "already done" - `address_legacy` does the same job.
+VOUCHER_NUMBERING = "voucher_numbering"
+
 PAN_RE = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
 # 2-digit state code, the holder's PAN, entity number, 'Z', then a check digit.
 GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$")
@@ -854,6 +859,41 @@ def _migrate(conn) -> None:
             (stored["address"],))
         conn.execute("DELETE FROM settings WHERE key = 'address'")
 
+    # Voucher numbers were a sequence PER TYPE until 2026-10-21 and are now
+    # one sequence for the book. Existing vouchers are renumbered into it -
+    # the user was shown both and chose this over leaving the history alone,
+    # because the real books held 42 numbers shared by two or three vouchers
+    # apiece, so "voucher no. 2" named three different vouchers.
+    if stored.get(VOUCHER_NUMBERING) != "sequence":
+        _renumber_in_sequence(conn)
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, 'sequence')"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (VOUCHER_NUMBERING,))
+
+
+def _renumber_in_sequence(conn) -> None:
+    """Give every voucher a number in ONE sequence, oldest first.
+
+    Ordered by date and then by the order they were entered, so the series
+    reads the way the books were written.
+
+    IN TWO PASSES, and that is not optional: the table carries
+    `UNIQUE (voucher_type, number)`, so renumbering in place trips over
+    itself the moment a voucher is given a number another voucher of the
+    same type still holds - Payment 2 becoming 4 while Payment 4 is sitting
+    there. The first pass parks every number in the negatives, which nothing
+    else can collide with, and the second lays down the real ones.
+    """
+    rows = conn.execute(
+        "SELECT id FROM vouchers ORDER BY voucher_date, id").fetchall()
+    if not rows:
+        return
+    conn.execute("UPDATE vouchers SET number = -id")
+    for position, row in enumerate(rows, start=1):
+        conn.execute("UPDATE vouchers SET number = ? WHERE id = ?",
+                     (position, int(row["id"])))
+
 
 def init_db() -> None:
     """Create the schema and the reserved masters. Safe to call repeatedly."""
@@ -1197,12 +1237,24 @@ def delete_ledger(ledger: int) -> None:
 # --------------------------------------------------------------------------- #
 # vouchers
 # --------------------------------------------------------------------------- #
-def next_voucher_number(voucher_type: str) -> int:
+def next_voucher_number() -> int:
+    """The next number in the books' ONE sequence, whatever the type.
+
+    Numbered across all types together (user asked 2026-10-21: "voucher
+    number should not be seperate by voucher type keep them in sequence").
+    It used to be a sequence per type, which meant a book could hold a
+    Contra 2, a Payment 2 and a Receipt 2 - and the real books held 42 such
+    collisions, so "voucher no. 2" named three different vouchers.
+
+    MAX + 1, so deleting the NEWEST voucher frees its number again while a
+    gap in the middle stays a gap. The user was offered closing the gap by
+    renumbering everything after it and chose this: a number that keeps
+    pointing at the voucher it always pointed at is worth more than an
+    unbroken series.
+    """
     with connect() as conn:
         row = conn.execute(
-            "SELECT COALESCE(MAX(number), 0) + 1 FROM vouchers WHERE voucher_type = ?",
-            (voucher_type,),
-        ).fetchone()
+            "SELECT COALESCE(MAX(number), 0) + 1 FROM vouchers").fetchone()
     return int(row[0])
 
 
@@ -1323,7 +1375,7 @@ def save_voucher(*, voucher_type: str, voucher_date, narration: str,
 
     with connect() as conn:
         if voucher_id is None:
-            assigned = number or next_voucher_number(voucher_type)
+            assigned = number or next_voucher_number()
             cur = conn.execute(
                 "INSERT INTO vouchers (voucher_type, number, voucher_date,"
                 " narration, created_at) VALUES (?, ?, ?, ?, ?)",
