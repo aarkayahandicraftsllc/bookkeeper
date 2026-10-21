@@ -134,19 +134,31 @@ def squeeze(text: str) -> str:
     return "".join((text or "").split())
 
 
+def read_amount(text: str) -> float | None:
+    """The figure a cell holds, or None if it does not hold one.
+
+    Kept apart from `parse_amount`, which answers 0.0 both for "empty" and
+    for "nonsense". That is right for adding a column up and wrong for
+    deciding whether to tidy a cell: **0.00 is a figure and "abc" is not**,
+    and only one of them should be rewritten.
+    """
+    cleaned = squeeze(text).replace(",", "")
+    if not cleaned:
+        return None
+    try:
+        return round(float(cleaned), 2)
+    except ValueError:
+        return None
+
+
 def parse_amount(text: str) -> float:
     """Read an amount typed or pasted, with or without separators.
 
     Blank means zero. So, still, does anything unreadable - see `squeeze` for
     what that costs and why whitespace in particular is no longer unreadable.
     """
-    cleaned = squeeze(text).replace(",", "")
-    if not cleaned:
-        return 0.0
-    try:
-        return round(float(cleaned), 2)
-    except ValueError:
-        return 0.0
+    amount = read_amount(text)
+    return 0.0 if amount is None else amount
 
 
 # --------------------------------------------------------------------------- #
@@ -770,6 +782,30 @@ def _cell_text(value) -> str:
     return "" if pd.isna(value) else str(value)
 
 
+# Two decimals and a thousands separator, wherever money is written to a
+# spreadsheet (user asked 2026-10-21: "the numbers in all the excel outputs
+# should have 2 decimal places and 1000 seperater"). Declared once because
+# both export layouts use it.
+#
+# A NUMBER FORMAT, not formatted text - which is what lets this sit happily
+# with the older rule that a spreadsheet keeps its figures as numbers. The
+# cell still holds the float, so the column can be summed and pivoted on
+# arrival; only its display changes.
+EXCEL_MONEY = "#,##0.00"
+
+
+def _excel_width(value, money: bool) -> int:
+    """How wide this value prints, which is not how wide it is stored.
+
+    A money column sized for `1234.5` is too narrow for `1,234.50`, and Excel
+    answers a column that is too narrow with `#####` - so the width has to be
+    measured on the formatted text, not the raw float.
+    """
+    if money and isinstance(value, (int, float)) and not pd.isna(value):
+        return len(f"{float(value):,.2f}")
+    return len(_cell_text(value))
+
+
 def _export_excel_sides(report: Report, target: Path) -> None:
     """A two-sided statement on ONE sheet, laid out the way it is read.
 
@@ -794,7 +830,7 @@ def _export_excel_sides(report: Report, target: Path) -> None:
     rule = Side(style="thin", color="FF999999")
     heavy = Side(style="medium", color="FF333333")
     band = PatternFill("solid", fgColor="FFF2F2F2")
-    money = "#,##0.00"
+    money = EXCEL_MONEY
     right = Alignment(horizontal="right")
 
     for column, width in _SIDE_WIDTHS.items():
@@ -934,14 +970,28 @@ def _export_excel(report: Report, target: Path) -> None:
             sheet["A3"] = report.period
             if section.heading:
                 sheet["A4"] = section.heading
+            # `startrow=4` puts the column headers on row 5, so the figures
+            # begin on row 6.
+            first = 6
+            money_columns = {c for c in section.numeric if c in frame.columns}
             # Enough width to read a ledger name or a formatted figure.
             for column, header in enumerate(frame.columns, start=1):
-                width = max(len(str(header)) + 2,
-                            *(len(str(v)) + 2 for v in frame[header])) \
-                    if len(frame) else len(str(header)) + 2
+                is_money = header in money_columns
+                width = max([len(str(header))]
+                            + [_excel_width(v, is_money)
+                               for v in frame[header]]) + 2
                 sheet.column_dimensions[
                     sheet.cell(row=5, column=column).column_letter].width = \
                     min(40, max(10, width))
+                if not is_money:
+                    continue
+                # The format goes on the CELLS rather than the column, which
+                # openpyxl does not style as a unit; a money column that
+                # holds text on some rows (the ledger's "88,000.00 Dr") is
+                # unharmed - Excel ignores a number format on text.
+                for offset in range(len(frame)):
+                    sheet.cell(row=first + offset,
+                               column=column).number_format = EXCEL_MONEY
             if report.notes:
                 start = 6 + len(frame)
                 for offset, note in enumerate(report.notes):
@@ -1577,33 +1627,45 @@ class VoucherScreen(QtWidgets.QWidget):
             cell.setText(acc.fmt_side(running[name]))
 
     def _tidy_amount(self, item) -> None:
-        """Take the padding off an amount that was pasted rather than typed.
+        """Put an amount into the ordinary form once it has been entered.
 
-        `parse_amount` already ignores the whitespace, so the voucher adds up
-        either way; this is about the cell you read back afterwards, which
-        should hold the figure and not the spacing it came with.
+        **Every amount, typed as well as pasted** - two decimals and a
+        thousands separator (user asked 2026-10-21: "while entering the
+        numbers manually in voucher entry it should be also in 1000 separator
+        automatically"). It had been pasted amounts only, on the reasoning
+        that a cell reformatting itself under the person entering it is its
+        own annoyance; the user asked for it anyway, and a column of figures
+        where some carry separators and some do not is the worse of the two.
 
-        Rewritten ONLY when whitespace was actually there. An amount being
-        typed by hand ("500") has to be left exactly as it stands - a cell
-        that reformats itself under the person entering it is worse than one
-        that shows "500" where the line above shows "1,000.00".
+        It is safe BECAUSE IT RUNS ON COMMIT, not on each keystroke: the
+        delegate writes the editor's text into the item when editing ends, so
+        this cannot move the caret or fight a half-typed number.
+
+        Three cases that must not be reformatted:
+        * an EMPTY cell, which would otherwise become 0.00 and read as a
+          figure that was entered - every blank line in the grid has two of
+          these;
+        * anything unreadable, which keeps its text so it can be seen and
+          corrected rather than being quietly turned into 0.00;
+        * a cell already in the ordinary form, so that the common case writes
+          nothing at all.
         """
         if self._loading or item is None or item.column() not in (1, 2):
             return
-        squeezed = squeeze(item.text())
-        if squeezed == item.text():
+        text = item.text()
+        if not text.strip():
             return
-        amount = parse_amount(squeezed)
+        amount = read_amount(text)
+        wanted = squeeze(text) if amount is None else f"{amount:,.2f}"
+        if wanted == text:
+            return
         # Signals blocked: this is a correction to what was just entered, not
         # a fresh entry, and the suggestion handler must not be told twice
         # about one change. The slots still to run in THIS emission read the
         # cell afresh, so they see the tidied figure.
         self.grid.blockSignals(True)
         try:
-            # Reformatted when it reads as money; otherwise only de-spaced, so
-            # that something unreadable stays visible to be corrected rather
-            # than being quietly turned into 0.00.
-            item.setText(f"{amount:,.2f}" if amount else squeezed)
+            item.setText(wanted)
         finally:
             self.grid.blockSignals(False)
 

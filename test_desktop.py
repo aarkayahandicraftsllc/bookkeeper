@@ -1164,7 +1164,47 @@ amounts = [sheet.cell(row=r, column=columns.index("Debit") + 1).value
            for r in range(6, 6 + len(trial.sections[0].frame))]
 check("exported amounts are numbers, not formatted text",
       all(v is None or isinstance(v, (int, float)) for v in amounts), True)
+# ...and asked 2026-10-21 to SHOW as money: "the numbers in all the excel
+# outputs should have 2 decimal places and 1000 seperater". Only the
+# side-by-side balance sheet carried a format before this; every other
+# report wrote its figures in General, so 1234.5 arrived as "1234.5".
+# A FORMAT keeps them summable, which is why both rules can hold at once.
+money_cells = [sheet.cell(row=r, column=columns.index("Debit") + 1)
+               for r in range(6, 6 + len(trial.sections[0].frame))]
+check("and every one of them shows as money",
+      {c.number_format for c in money_cells}, {desktop.EXCEL_MONEY})
+check("the text columns are left alone",
+      sheet.cell(row=6, column=columns.index("Particulars") + 1).number_format,
+      "General")
+# A column sized for the raw float shows ##### once it is formatted.
+check("the money column is wide enough for the formatted figure",
+      sheet.column_dimensions[
+          sheet.cell(row=5, column=columns.index("Debit") + 1).column_letter
+      ].width >= len(f"{max(v or 0 for v in amounts):,.2f}"), True)
 book.close()
+
+# Every report, not just the one: each section declares which columns hold
+# money, and all of them are now formatted.
+for index, where in ((1, "Day Book"), (2, "Ledger"), (4, "Profit & Loss")):
+    window.show_screen(index)
+    settle()
+    report = window.current_report()
+    path = db.DATA_DIR / f"money-{index}.xlsx"
+    desktop.export_report(report, path=str(path))
+    opened = openpyxl.load_workbook(path)
+    formats = set()
+    for position, section in enumerate(report.sections):
+        page = opened[opened.sheetnames[position]]
+        header = [c.value for c in page[5]]
+        for column in section.numeric:
+            if column not in header:
+                continue
+            at = header.index(column) + 1
+            formats |= {page.cell(row=r, column=at).number_format
+                        for r in range(6, 6 + len(section.frame))}
+    check(f"{where}: money columns carry the format",
+          formats <= {desktop.EXCEL_MONEY}, True)
+    opened.close()
 # ...while the printed page IS formatted, being the copy somebody reads.
 check("the printed page groups the thousands",
       "," in desktop.report_html(trial), True)
@@ -1647,7 +1687,9 @@ v.grid.item(0, 1).setText("1,000.00")        # retype the same figure
 settle()
 check("re-entering the same amount disturbs nothing typed",
       [v.grid.item(1, 2).text(), v.grid.item(2, 2).text()],
-      ["400", "600"])
+      # Tidied to the ordinary form as of 2026-10-21 - the FIGURES are what
+      # must be undisturbed, and 400 and 600 are still exactly what stands.
+      ["400.00", "600.00"])
 
 # A suggestion that is no longer needed is withdrawn, not left to be read as
 # a figure.
@@ -1996,14 +2038,37 @@ check("and the voucher counts it", v.dr_label.text(), "Dr 1,000.00")
 check("the balancing amount is still offered from it",
       v.grid.item(1, 2).text(), "1,000.00")
 
-# Typed amounts must be left ALONE - a cell that reformats itself under the
-# person entering it is its own annoyance.
+# TYPED amounts are tidied as well, as asked later the same day: "while
+# entering the numbers manually in voucher entry it should be also in 1000
+# separator automatically". This reverses the original choice to leave typed
+# figures exactly as typed. Safe because it runs on COMMIT, not per
+# keystroke, so it cannot fight a half-typed number.
 v.reset()
 settle()
 set_row(v, 0, "Bank")
 v.grid.item(0, 1).setText("500")
 settle()
-check("a typed amount is not reformatted", v.grid.item(0, 1).text(), "500")
+check("a typed amount gains its decimals", v.grid.item(0, 1).text(), "500.00")
+v.grid.item(0, 1).setText("1234567.5")
+settle()
+check("and its thousands separators",
+      v.grid.item(0, 1).text(), "1,234,567.50")
+v.grid.item(0, 1).setText("0")
+settle()
+check("zero is a figure, so it is tidied too",
+      v.grid.item(0, 1).text(), "0.00")
+
+# An EMPTY cell must stay empty: every blank line in the grid holds two of
+# them, and 0.00 would read as a figure somebody entered.
+v.grid.item(0, 1).setText("")
+settle()
+check("an empty cell stays empty", v.grid.item(0, 1).text(), "")
+v.reset()
+settle()
+check("and a fresh form holds no figures at all",
+      [v.grid.item(r, c).text()
+       for r in range(v.grid.rowCount()) for c in (1, 2)],
+      [""] * (v.grid.rowCount() * 2))
 
 # Something unreadable keeps its text, so it can be seen and corrected,
 # rather than being turned into a confident 0.00.
