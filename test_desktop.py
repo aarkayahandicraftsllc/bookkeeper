@@ -2489,7 +2489,8 @@ window._history.clear()
 window._sync_back()
 back_buttons = window.findChildren(QtWidgets.QPushButton,
                                    desktop.ReportActions.BACK)
-check("every report screen carries a Back button", len(back_buttons), 5)
+check("every report screen carries a Back button", len(back_buttons),
+      len(window.findChildren(desktop.ReportActions)))
 check("and none of them is offered with nowhere to go",
       {b.isEnabled() for b in back_buttons}, {False})
 check("nor is the menu entry", window.back_action.isEnabled(), False)
