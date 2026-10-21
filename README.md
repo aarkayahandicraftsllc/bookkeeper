@@ -415,13 +415,32 @@ Balances are held **debit-positive** internally: `+500` is 500 Dr, `-500` is
 | Screen | What it does |
 | --- | --- |
 | **Voucher Entry** | Type, date, auto number, narration, then a Dr/Cr grid with ledger autocomplete and running totals. Accept is disabled until the two sides agree. **Copy** repeats a voucher without retyping it. |
-| **Day Book** | Every voucher in the period, newest first, with **Debit account** and **Credit account** as separate columns. Double-click to alter one. |
+| **Day Book** | Every voucher in the period, newest first, with **Debit account** and **Credit account** as separate columns. Double-click to alter one. Printed and exported **line by line**. |
 | **Ledger** | One account: opening balance, every entry with **To**/**By** particulars naming the other side, a running balance, closing. Double-click an entry to alter that voucher. |
 | **Trial Balance** | Closing balances as Dr and Cr, by ledger or summarised by group, with or without **accounts standing at nil**. The total is a bar under the table, so the table itself can be sorted. **Double-click an account to read its ledger.** |
 | **Profit & Loss** | Trading account → gross profit, then the indirect accounts → net profit. |
 | **Balance Sheet** | Liabilities and assets side by side, with net profit carried to Profit & Loss A/c. Summary, or **the accounts under each heading**. |
 | **Masters** | Create and alter ledgers and sub-groups. |
 | **Company** | Who the books belong to: name, address, PAN, GSTIN, TAN, CIN, financial year, currency. |
+
+### The exported Day Book is line by line
+
+On screen a voucher is **one row** — the right shape to read down a column and
+to double-click. That puts a compound voucher's accounts in a single cell as
+`Rent / Electricity / Phone` against one total, so **the amount belonging to
+each is nowhere on the page**. Printing and exporting therefore use
+`acc.day_book_lines`: **one row per voucher line**, with its own figure, plus
+the narration the screen has no room for.
+
+The voucher's date, type and number **repeat on every one of its lines** rather
+than sitting blank under the first. That is what makes the file worth having —
+each row stands on its own, so it can be sorted by account, filtered to one
+voucher type or pivoted, none of which works if half the rows only mean
+anything in the context of the row above.
+
+Adding the Debit column up gives the same total as the per-voucher view, since
+a voucher's total **is** the sum of its lines — there is no double counting of
+the sort the detailed balance sheet has to warn about.
 
 ### Getting from one report to another
 

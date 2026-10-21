@@ -2758,13 +2758,38 @@ class DayBookScreen(QtWidgets.QWidget):
                         else [])
 
     def report(self) -> Report:
+        """The day book LINE BY LINE, which is not what the screen shows.
+
+        Asked for 2026-10-21: "while exporting daybook not able to see
+        individual amounts for multiline entries". On screen a voucher is one
+        row, which is the right shape to read down and to double-click - but
+        it means a compound voucher's accounts arrive as "Rent / Electricity"
+        against a single total, and the figure belonging to each is nowhere.
+        Print and export both come through here, so both now carry the lines.
+        """
         kind = self.type_filter.currentText()
+        start, end = self.period.range()
+        lines = acc.day_book_lines(start, end)
+        if kind != "All" and not lines.empty:
+            lines = lines[lines["Vch Type"] == kind].reset_index(drop=True)
+        voided = int(lines["voided"].sum()) if not lines.empty else 0
+        shown = (lines.drop(columns=["voucher_id", "voided"]) if not lines.empty
+                 else pd.DataFrame(columns=["Date", "Vch Type", "Vch No",
+                                            "Account", "Debit", "Credit",
+                                            "Narration"]))
+        # Only when there is something to say, as on screen.
+        if voided:
+            shown.insert(len(shown.columns), "Status",
+                         ["Voided" if v else "" for v in lines["voided"]])
         return Report(
             title="Day Book",
             period=period_caption(self.period)
             + ("" if kind == "All" else f"  ·  {kind} vouchers only"),
-            sections=[ReportSection("", self._shown, ("Debit", "Credit"))],
-            notes=[self.count.text()])
+            sections=[ReportSection("", shown, ("Debit", "Credit"))],
+            notes=[self.count.text(),
+                   "One row per voucher line, so a compound voucher shows "
+                   "the amount against each account. A voucher's date, type "
+                   "and number repeat on each of its lines."])
 
     def _open(self, index) -> None:
         # Read from the row, not from its position: once the table is sorted,

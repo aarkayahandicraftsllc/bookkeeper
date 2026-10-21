@@ -297,6 +297,58 @@ def day_book(date_from=None, date_to=None) -> pd.DataFrame:
                 .reset_index(drop=True)
 
 
+def day_book_lines(date_from=None, date_to=None) -> pd.DataFrame:
+    """Every voucher in the period, one row per LINE rather than per voucher.
+
+    For taking the day book away with you (user asked 2026-10-21: "while
+    exporting daybook not able to see individual amounts for multiline
+    entries"). `day_book` puts a voucher on one row, which means a compound
+    voucher's accounts arrive as "Rent / Electricity / Phone" against a
+    single total - the figure that belongs to each one is nowhere on the
+    page.
+
+    The voucher's date, type and number are REPEATED on each of its lines
+    rather than left blank under the first. That is what makes the export
+    worth having: every row stands on its own, so the file can be sorted by
+    account, filtered to one voucher type, or pivoted, none of which works
+    if half the rows only make sense in the context of the row above.
+
+    Adding the Debit column up still gives the same total as `day_book`'s,
+    since a voucher's total is exactly the sum of its lines - there is no
+    double counting here of the sort the detailed balance sheet has to warn
+    about.
+    """
+    lines = db.get_lines(date_from=date_from, date_to=date_to,
+                         include_voided=True)
+    columns = ["Date", "Vch Type", "Vch No", "Account", "Debit", "Credit",
+               "Narration", "voided", "voucher_id"]
+    if lines.empty:
+        return pd.DataFrame(columns=columns)
+
+    records = []
+    for row in lines.sort_values(["voucher_id", "line_order"]).itertuples():
+        voided = bool(getattr(row, "voided", 0))
+        records.append({
+            "Date": row.voucher_date,
+            "Vch Type": row.voucher_type,
+            "Vch No": int(row.number),
+            "Account": row.ledger_name,
+            # Nil for a voided voucher, exactly as `day_book` shows it: it
+            # moves no value, and a day book that summed its old amounts
+            # would disagree with every other report.
+            "Debit": 0.0 if voided else round(float(row.debit), 2),
+            "Credit": 0.0 if voided else round(float(row.credit), 2),
+            "Narration": row.narration,
+            "voided": voided,
+            "voucher_id": int(row.voucher_id),
+        })
+    frame = pd.DataFrame(records, columns=columns)
+    # Newest voucher first, as the Day Book reads - but a voucher's own lines
+    # keep the order they were entered in, which is the order they balance in.
+    return frame.sort_values(["Date", "Vch No"], ascending=[False, False],
+                             kind="stable").reset_index(drop=True)
+
+
 # --------------------------------------------------------------------------- #
 # trial balance
 # --------------------------------------------------------------------------- #

@@ -1579,6 +1579,69 @@ window.daybook.refresh()
 window.trial.refresh()
 settle()
 
+print("\n22d) The exported Day Book shows every line's own amount")
+# Asked 2026-10-21: "while exporting daybook not able to see individual
+# amounts for multiline entries". On screen a voucher is ONE row - the right
+# shape to read down and to double-click - but that puts a compound
+# voucher's accounts in one cell as "Rent / Electricity" against a single
+# total, with the figure belonging to each nowhere on the page.
+db.use_company(TMP)
+window.show_screen(1)
+window.daybook.type_filter.setCurrentText("All")
+window.daybook.period.year_box.setCurrentText(desktop.PeriodBar.SINCE)
+window.daybook.refresh()
+settle()
+
+compound = db.save_voucher(
+    voucher_type="Journal", voucher_date=date.today(),
+    narration="three legs, one voucher",
+    lines=[{"ledger_id": db.ledger_id("Bank"), "debit": 700, "credit": 0},
+           {"ledger_id": db.ledger_id("Sales"), "debit": 0, "credit": 300},
+           {"ledger_id": db.ledger_id("Capital"), "debit": 0, "credit": 400}])
+window.daybook.refresh()
+settle()
+
+on_screen = window.daybook._shown
+exported = window.daybook.report().sections[0].frame
+check("on screen it is still one row per voucher",
+      list(on_screen.columns)[:3], ["Date", "Debit account", "Credit account"])
+check("the exported day book is one row per LINE",
+      list(exported.columns)[:6],
+      ["Date", "Vch Type", "Vch No", "Account", "Debit", "Credit"])
+
+mine = exported[exported["Narration"] == "three legs, one voucher"]
+check("every line of the compound voucher is there", len(mine), 3)
+check("each with the amount that belongs to IT",
+      sorted(round(float(d) + float(c), 2)
+             for d, c in zip(mine["Debit"], mine["Credit"])),
+      [300.0, 400.0, 700.0])
+check("named account by account, not joined into one cell",
+      sorted(mine["Account"]), ["Bank", "Capital", "Sales"])
+check("with the voucher's type and number repeated on each line",
+      [set(mine["Vch Type"]), len(set(mine["Vch No"]))], [{"Journal"}, 1])
+check("and its narration, which the screen has no room for",
+      set(mine["Narration"]), {"three legs, one voucher"})
+
+# The column still adds up to the same total, so nothing is double-counted -
+# a voucher's total IS the sum of its lines.
+check("the lines total what the vouchers total",
+      round(float(exported["Debit"].sum()), 2),
+      round(float(on_screen["Debit"].sum()), 2))
+
+# A voided voucher's lines read nil here too, as they do on screen.
+db.void_voucher(compound)
+window.daybook.refresh()
+settle()
+voided_lines = window.daybook.report().sections[0].frame
+voided_lines = voided_lines[voided_lines["Narration"] == "three legs, one voucher"]
+check("a voided voucher's lines are shown as nil",
+      [float(v) for v in voided_lines["Debit"]], [0.0, 0.0, 0.0])
+check("and say so in a Status column",
+      set(voided_lines["Status"]), {"Voided"})
+db.delete_voucher(compound)
+window.daybook.refresh()
+settle()
+
 print("\n23) Voiding, restoring and deleting a voucher")
 db.use_company(TMP)
 voucher = window.voucher
