@@ -2401,6 +2401,11 @@ check("either way round", desktop.read_amount("88,000.00 Dr",
                                               desktop.COLUMN_SIDE[2]), None)
 check("a marker at the front reads too",
       desktop.read_amount("Dr 500", desktop.COLUMN_SIDE[1]), 500.0)
+# And refused where there is NO side to check it against. The fork reads
+# amounts from boxes that have no side at all - a bill allocation, a GST
+# rate - and a claim nobody can check is not a figure.
+check("a marker with no column to agree with is refused",
+      desktop.read_amount("500 Cr"), None)
 
 # End to end, which is the point: a decorated figure reaches the books as a
 # figure. The cell shows what it was read as, so the removal is visible

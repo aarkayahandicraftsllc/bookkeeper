@@ -218,7 +218,10 @@ def read_amount(text: str, side: str | None = None) -> float | None:
     `side` is the column the figure is going into, "Dr" or "Cr". A figure
     carrying the OPPOSITE marker is refused rather than read: "500 Cr"
     dropped into the Debit column is not 500 Dr, and taking the number and
-    throwing the word away would post the wrong side of an entry.
+    throwing the word away would post the wrong side of an entry. **A marker
+    is refused where there is no `side` to check it against, too** - the fork
+    reads amounts from boxes that have no side at all (a bill allocation, a
+    GST rate), and a claim nobody can check is not a figure.
 
     **Decoration comes off, letters do not.** A currency sign or a bracket is
     packaging round a figure; a letter is either a word ("NIL") or a marker
@@ -229,7 +232,7 @@ def read_amount(text: str, side: str | None = None) -> float | None:
     if not cleaned:
         return None
     cleaned, marker = _side_marker(cleaned)
-    if marker and side and marker != side:
+    if marker and marker != side:
         return None
     cleaned = _strip_currency_word(cleaned)
     if any(char.isalpha() for char in _DECORATION.findall(cleaned)):
