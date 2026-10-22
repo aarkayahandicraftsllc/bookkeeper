@@ -107,9 +107,12 @@ jobs:
             **macOS: drag `Bookkeeper.app` out of the .dmg into Applications**,
             replacing the old one. Your books are NOT inside the app — they
             live in `~/Library/Application Support/Bookkeeper/data`, so
-            replacing the app leaves them untouched. First launch: Gatekeeper
-            will refuse an unsigned app opened by double-click, so
-            **right-click the app and choose Open**, once.
+            replacing the app leaves them untouched. First launch: macOS will
+            refuse it ("Apple could not verify..."), because the app is not
+            notarised. Go to **System Settings -> Privacy & Security ->
+            Security -> Open Anyway**, which appears after a blocked attempt.
+            Or `xattr -dr com.apple.quarantine /Applications/Bookkeeper.app`.
+            Right-click -> Open does NOT work on macOS 15 or later.
 
             Neither platform's update touches your books. Any new database
             columns are added on first open.
@@ -191,9 +194,12 @@ jobs:
             **macOS: drag `Bookkeeper.app` out of the .dmg into Applications**,
             replacing the old one. Your books are NOT inside the app — they
             live in `~/Library/Application Support/Bookkeeper/data`, so
-            replacing the app leaves them untouched. First launch: Gatekeeper
-            will refuse an unsigned app opened by double-click, so
-            **right-click the app and choose Open**, once.
+            replacing the app leaves them untouched. First launch: macOS will
+            refuse it ("Apple could not verify..."), because the app is not
+            notarised. Go to **System Settings -> Privacy & Security ->
+            Security -> Open Anyway**, which appears after a blocked attempt.
+            Or `xattr -dr com.apple.quarantine /Applications/Bookkeeper.app`.
+            Right-click -> Open does NOT work on macOS 15 or later.
 
             Neither platform's update touches your books. Any new database
             columns are added on first open.

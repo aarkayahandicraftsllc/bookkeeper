@@ -119,13 +119,23 @@ A5a. On the WINDOWS personal computer
 A5b. On the MACBOOK
     - Same Releases page; download the -macOS-arm64.dmg.
     - Open the .dmg and drag Bookkeeper.app into Applications.
-    - FIRST LAUNCH: do NOT double-click it. Right-click (or Control-click)
-      the app and choose Open, then confirm. Double-clicking an unsigned app
-      downloaded from the internet gets you "cannot be opened because the
-      developer cannot be verified" with no way forward; right-click -> Open
-      is the route that offers one. You only need this once per version.
-      (If macOS refuses even then, run this in Terminal:
-         xattr -d com.apple.quarantine /Applications/Bookkeeper.app )
+    - FIRST LAUNCH: macOS will refuse, saying "Apple could not verify
+      Bookkeeper is free of malware...". That is expected on every new
+      version - the app is not notarised, which needs a paid Apple Developer
+      account. Two ways through:
+
+        EITHER  System Settings -> Privacy & Security -> scroll to Security.
+                After a blocked attempt there is a line about Bookkeeper with
+                an "Open Anyway" button. Click it, authenticate, confirm.
+
+        OR      in Terminal:
+                  xattr -dr com.apple.quarantine /Applications/Bookkeeper.app
+                then open it normally. The -r matters: an app bundle is a
+                folder, and the quarantine flag sits on more than the top of
+                it.
+
+      NOTE: on macOS 15 (Sequoia) and later, right-click -> Open NO LONGER
+      WORKS. Apple removed that bypass. Use one of the two above.
     - Put the books in ~/Library/Application Support/Bookkeeper/data -
       see "MOVING THE BOOKS". NOT inside the app.
     - Eject the .dmg afterwards.
@@ -306,16 +316,25 @@ TROUBLESHOOTING
     "More info" -> "Run anyway". Expected on every new version - the app has
     no code-signing certificate.
 
-MAC: "Bookkeeper.app cannot be opened because the developer cannot be
-verified", with only Cancel / Move to Bin
-    You double-clicked it. Right-click (or Control-click) the app and choose
-    Open instead - that dialog has an Open button, the double-click one does
-    not. Once per version. Stubborn cases:
-        xattr -d com.apple.quarantine /Applications/Bookkeeper.app
+MAC: "Apple could not verify Bookkeeper is free of malware", or "cannot be
+opened because the developer cannot be verified", with only Cancel / Move to
+Bin / Done
+    Expected, once per downloaded version. The app is not notarised.
+    System Settings -> Privacy & Security -> Security section -> "Open
+    Anyway" (it appears only after a blocked attempt). Or:
+        xattr -dr com.apple.quarantine /Applications/Bookkeeper.app
+    RIGHT-CLICK -> OPEN DOES NOT WORK on macOS 15 (Sequoia) or later; Apple
+    removed it. Older macOS still accepts it.
 
 MAC: "Bookkeeper is damaged and cannot be opened"
     Same cause - the quarantine flag on an unsigned app - despite the
     wording. Nothing is damaged. Use the xattr command above.
+
+MAC: tired of clearing it on every update?
+    The flag comes from DOWNLOADING. An app you build on the Mac itself is
+    never quarantined, so Route B (install Python, run build_exe.py there)
+    skips all of this permanently. The alternative is a paid Apple Developer
+    account to notarise the builds.
 
 MAC: the app bounces once in the Dock and quits
     Run it from Terminal to see the error it is hiding:
