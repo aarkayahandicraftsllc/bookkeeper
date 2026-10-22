@@ -589,8 +589,9 @@ reports from opening.
 Every report screen carries **Print…** (`Ctrl+P`) and **Export…** (`Ctrl+E`),
 also under the **Report** menu — **Masters included**, since a chart of
 accounts is something people ask you for. Voucher Entry and Company are forms
-rather than lists and say so instead of printing something arbitrary. A report nobody can get out of the window is
-half a report — it has to reach an auditor, a bank, or an email.
+rather than lists and say so instead of printing something arbitrary. A report
+nobody can get out of the window is half a report — it has to reach an auditor,
+a bank, or an email.
 
 **Print** opens a **preview** rather than going straight to a print dialog:
 these are wide tables, and whether one fits the page is the first thing anybody
