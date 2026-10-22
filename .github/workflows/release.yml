@@ -1,10 +1,10 @@
-# Builds Bookkeeper.exe on GitHub's machines.
+# Builds Bookkeeper for Windows and macOS on GitHub's machines.
 #
-# Why this exists: the work computer blocks copying an .exe off it, so the
-# 144 MB executable cannot be hand-carried to the personal machine. Pushing a
-# tag here produces a downloadable .exe attached to a GitHub Release instead --
-# only source ever leaves the work machine, and the personal PC needs neither
-# Python nor PyInstaller. Same arrangement as the networth-tracker project.
+# Why this exists: the work computer blocks copying an executable off it, so
+# the binaries cannot be hand-carried to the personal machines. Pushing a tag
+# here produces both downloads attached to a GitHub Release instead -- only
+# source ever leaves the work machine, and neither personal machine needs
+# Python or PyInstaller. Same arrangement as the networth-tracker project.
 # See UPDATE-ON-PERSONAL-PC.txt.
 #
 #   Cut a release:   git tag v1.0.0 && git push origin v1.0.0
@@ -14,12 +14,16 @@
 # no version string of its own, so a tag is only a label for the release page
 # and there is nothing it could contradict.
 #
+# PyInstaller cannot cross-compile, so each platform is built on its own
+# runner, and the macOS one is arm64 (Apple Silicon) because that is the
+# machine it is for. An Intel Mac would need a second job on macos-13.
+#
 # DESKTOP ONLY. requirements-desktop.txt is installed and requirements.txt
 # (Streamlit) is not, so test_multi_company.py skips its browser section and
-# reports "PASSED, WITH SKIPS" -- that is the expected result here, and
-# test_ui.py is not run at all because it exists only to drive that front end.
+# reports "PASSED, WITH SKIPS" -- the expected result here. test_ui.py is not
+# run at all, since it exists only to drive that front end.
 
-name: Build Bookkeeper.exe
+name: Build Bookkeeper
 
 on:
   push:
@@ -31,7 +35,7 @@ permissions:
 
 jobs:
   windows:
-    name: Windows executable (.exe)
+    name: Windows (.exe)
     runs-on: windows-latest
 
     steps:
@@ -47,8 +51,7 @@ jobs:
         run: pip install -r requirements-desktop.txt pyinstaller
 
       # The suites run BEFORE the build, so a release can never carry a build
-      # that fails its own checks. Qt runs headless here; there is no display
-      # on a CI runner.
+      # that fails its own checks. Qt runs headless; a runner has no display.
       - name: Accounting and report checks
         run: python test_books.py
 
@@ -67,19 +70,17 @@ jobs:
       - name: Build the executable
         run: python build_exe.py
 
-      # Named with the tag for the release page, because the build itself
-      # always produces a bare "Bookkeeper.exe" and several downloads would
-      # otherwise collide in one Downloads folder.
+      # Named for the release, because the build always produces a bare
+      # Bookkeeper.exe and several downloads would collide in one folder.
       - name: Name it for this release
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
-        run: cp Bookkeeper.exe "Bookkeeper-${GITHUB_REF_NAME}.exe"
+        run: cp Bookkeeper.exe "Bookkeeper-${GITHUB_REF_NAME}-Windows-x64.exe"
 
-      # Available on every run, including a manual dispatch with no tag.
       - name: Upload as a build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Bookkeeper-exe
+          name: Bookkeeper-Windows
           path: Bookkeeper.exe
           if-no-files-found: error
 
@@ -87,19 +88,112 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: Bookkeeper-${{ github.ref_name }}.exe
+          files: Bookkeeper-${{ github.ref_name }}-Windows-x64.exe
           body: |
-            Bookkeeper desktop app, ${{ github.ref_name }}. Windows, 64-bit.
+            Bookkeeper desktop app, ${{ github.ref_name }}.
 
-            **Put it in the folder that already holds `data\`, replacing the
-            old `Bookkeeper.exe`.** The books live in a `data\` folder beside
+            **Windows** — `Bookkeeper-${{ github.ref_name }}-Windows-x64.exe`
+            **macOS (Apple Silicon)** — `Bookkeeper-${{ github.ref_name }}-macOS-arm64.dmg`
+
+            ---
+
+            **Windows: put the exe in the folder that already holds `data\`,
+            replacing the old one.** The books live in a `data\` folder beside
             the executable, so an exe run from anywhere else — Downloads, the
-            desktop — creates its own empty `data\` and opens blank books.
-            That looks exactly like data loss and is not; the books are still
-            in the old folder.
+            desktop — makes its own empty `data\` and opens blank books. That
+            looks exactly like data loss and is not; the books are still in
+            the old folder.
 
-            Windows SmartScreen will warn, because the app is not
-            code-signed: choose "More info" then "Run anyway".
+            **macOS: drag `Bookkeeper.app` out of the .dmg into Applications**,
+            replacing the old one. Your books are NOT inside the app — they
+            live in `~/Library/Application Support/Bookkeeper/data`, so
+            replacing the app leaves them untouched. First launch: Gatekeeper
+            will refuse an unsigned app opened by double-click, so
+            **right-click the app and choose Open**, once.
 
-            Your books are not touched by replacing the executable. Any new
-            database columns are added on first open.
+            Neither platform's update touches your books. Any new database
+            columns are added on first open.
+
+  macos:
+    name: macOS (.dmg, Apple Silicon)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-desktop.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-desktop.txt pyinstaller
+
+      # NOTE: the app has never run on macOS, and test_desktop.py asserts
+      # window widths MEASURED FROM FONT METRICS. If this job fails on a width
+      # or geometry check, that is a Windows-calibrated assertion meeting a
+      # different default font -- a test to make platform-aware, not
+      # necessarily a defect in the app. The arithmetic suite is the one that
+      # proves the books are right, and it is platform-independent.
+      - name: Accounting and report checks
+        run: python test_books.py
+
+      - name: Desktop checks
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python test_desktop.py
+
+      - name: Launch-path checks
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python test_multi_company.py
+
+      # Produces dist/Bookkeeper.app and wraps it in dist/Bookkeeper.dmg.
+      - name: Build the app bundle and disk image
+        run: python build_exe.py
+
+      - name: Name it for this release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cp dist/Bookkeeper.dmg "Bookkeeper-${GITHUB_REF_NAME}-macOS-arm64.dmg"
+
+      - name: Upload as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bookkeeper-macOS
+          path: dist/Bookkeeper.dmg
+          if-no-files-found: error
+
+      # The SAME body as the Windows job, deliberately duplicated: the two
+      # jobs finish in whichever order they finish, and both attach to one
+      # release. Identical text means the notes read the same regardless of
+      # which one wrote them last. (Actions does not support YAML anchors.)
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Bookkeeper-${{ github.ref_name }}-macOS-arm64.dmg
+          body: |
+            Bookkeeper desktop app, ${{ github.ref_name }}.
+
+            **Windows** — `Bookkeeper-${{ github.ref_name }}-Windows-x64.exe`
+            **macOS (Apple Silicon)** — `Bookkeeper-${{ github.ref_name }}-macOS-arm64.dmg`
+
+            ---
+
+            **Windows: put the exe in the folder that already holds `data\`,
+            replacing the old one.** The books live in a `data\` folder beside
+            the executable, so an exe run from anywhere else — Downloads, the
+            desktop — makes its own empty `data\` and opens blank books. That
+            looks exactly like data loss and is not; the books are still in
+            the old folder.
+
+            **macOS: drag `Bookkeeper.app` out of the .dmg into Applications**,
+            replacing the old one. Your books are NOT inside the app — they
+            live in `~/Library/Application Support/Bookkeeper/data`, so
+            replacing the app leaves them untouched. First launch: Gatekeeper
+            will refuse an unsigned app opened by double-click, so
+            **right-click the app and choose Open**, once.
+
+            Neither platform's update touches your books. Any new database
+            columns are added on first open.

@@ -1,9 +1,23 @@
 ===============================================================================
-BOOKKEEPER - GETTING IT ONTO YOUR PERSONAL COMPUTER
+BOOKKEEPER - GETTING IT ONTO YOUR PERSONAL COMPUTERS
 ===============================================================================
-Written 2026-10-21.
+Written 2026-10-21. Windows and macOS (Apple Silicon).
 Source project on the work machine:
   C:\Users\223137552.AEROAD\claude-projects\Bookkeeper\
+
+WHERE THE BOOKS LIVE IS NOT THE SAME ON THE TWO PLATFORMS. Read the section
+"THE ONE WARNING THAT MATTERS MOST" before installing on either.
+
+  Windows   the data\ folder BESIDE Bookkeeper.exe
+  macOS     ~/Library/Application Support/Bookkeeper/data
+
+THE MAC BUILD HAS NEVER BEEN RUN BY A HUMAN. GitHub proves it compiles and
+that the checks pass headlessly; it cannot prove the app feels right. Expect
+rough edges, and the voucher-type shortcuts in particular: Alt+Shift+P and
+friends become Option+Shift+P on a Mac, where that combination sometimes types
+a special character instead of firing. Ctrl+A, Ctrl+P and the rest become
+Cmd+A, Cmd+P, which Qt does automatically. Report anything odd and it can be
+fixed properly.
 
 This is the DESKTOP app only. The browser (Streamlit) version is not being
 set up on the personal computer: Streamlit is never installed, nothing listens
@@ -15,10 +29,10 @@ Bookkeeper Plus is a separate project and is NOT part of this move.
 
 THE SITUATION
 -------------
-The work computer blocks copying the .exe off it. That is fine - you do not
-need to move the .exe. The whole program is 10 plain-text source files of
-about 1 MB, and the executable can be rebuilt from that text on the other side
-(or built for you in the cloud, for free).
+The work computer blocks copying an executable off it. That is fine - you do
+not need to move one. The whole program is 10 plain-text source files of about
+1 MB, and a Windows .exe AND a Mac .app can both be built from that text in
+the cloud, for free, by the machine that hosts the source.
 
 TWO THINGS HAVE TO TRAVEL, AND THEY GO SEPARATELY:
 
@@ -65,38 +79,64 @@ A2. Push the source from the work computer
 
 A3. The build recipe is already in the project
     .github\workflows\release.yml is committed, so there is nothing to write.
-    It tells GitHub to install Python, run the three test suites, build the
-    .exe with PyInstaller, and attach it to the release.
+    It tells GitHub to install Python, run the three test suites, and build -
+    TWICE, once on a Windows machine and once on an Apple Silicon Mac, because
+    PyInstaller cannot build for one platform from the other. Both results are
+    attached to the same release.
 
     Confirm it arrived: on github.com open the "Actions" tab. You should see a
-    workflow called "Build Bookkeeper.exe".
+    workflow called "Build Bookkeeper" with two jobs under it.
 
 A4. Cut a release
 
       git tag v1.0.0
       git push origin v1.0.0
 
-    Watch it on the Actions tab (about 5-8 minutes). When it finishes the exe
-    is in two places:
-      - Releases tab -> v1.0.0 -> Assets -> Bookkeeper-v1.0.0.exe
+    Watch it on the Actions tab (about 5-8 minutes for Windows, a little more
+    for the Mac). When both jobs finish, the downloads are in two places:
+      - Releases tab -> v1.0.0 -> Assets, holding BOTH
+            Bookkeeper-v1.0.0-Windows-x64.exe
+            Bookkeeper-v1.0.0-macOS-arm64.dmg
       - Actions -> that run -> Artifacts
 
     Expected in the log, and not a problem: the launch-path suite ends
     "MULTI-COMPANY CHECKS PASSED, WITH SKIPS". Its last section drives the
     browser version, which is deliberately not installed.
 
-A5. On the PERSONAL computer
+    If the MAC job fails on a window-width or geometry check, that is a test
+    calibrated to Windows font metrics meeting a Mac's default font - not a
+    fault in the accounting. It needs fixing properly in the test, then
+    re-tagging. The Windows job is unaffected and its .exe still builds.
+
+A5a. On the WINDOWS personal computer
     - Open https://github.com/aarkayahandicraftsllc/bookkeeper/releases
-    - Sign in (private repo) and download Bookkeeper-v1.0.0.exe.
+    - Sign in (private repo) and download the -Windows-x64.exe.
     - Make a folder for it, e.g. C:\Bookkeeper\, and put the exe there.
     - Rename it to Bookkeeper.exe (optional, but keeps future updates tidy).
     - Put the books beside it - see "MOVING THE BOOKS".
     - Double-click it. SmartScreen -> "More info" -> "Run anyway".
 
+A5b. On the MACBOOK
+    - Same Releases page; download the -macOS-arm64.dmg.
+    - Open the .dmg and drag Bookkeeper.app into Applications.
+    - FIRST LAUNCH: do NOT double-click it. Right-click (or Control-click)
+      the app and choose Open, then confirm. Double-clicking an unsigned app
+      downloaded from the internet gets you "cannot be opened because the
+      developer cannot be verified" with no way forward; right-click -> Open
+      is the route that offers one. You only need this once per version.
+      (If macOS refuses even then, run this in Terminal:
+         xattr -d com.apple.quarantine /Applications/Bookkeeper.app )
+    - Put the books in ~/Library/Application Support/Bookkeeper/data -
+      see "MOVING THE BOOKS". NOT inside the app.
+    - Eject the .dmg afterwards.
+
 FOR EVERY FUTURE UPDATE:
-    on work PC:      git push && git tag v1.0.1 && git push origin v1.0.1
-    on personal PC:  download from Releases, and REPLACE the exe that is
-                     already sitting beside data\ (see the warning below)
+    on work PC:   git push && git tag v1.0.1 && git push origin v1.0.1
+    on Windows:   download, and REPLACE the exe that is already sitting
+                  beside data\ (see the warning below)
+    on the Mac:   download, drag the new app into Applications over the old
+                  one, and right-click -> Open the first time. Your books are
+                  not in the app, so they are untouched.
 
 
 ===============================================================================
@@ -127,8 +167,16 @@ B3. Unzip it, then:
 
     Do NOT install requirements.txt - that is the browser version's Streamlit.
 
-    build_exe.py writes Bookkeeper.exe into that same folder, deliberately
-    beside data\, so the exe and "python desktop.py" read the same books.
+    ON WINDOWS build_exe.py writes Bookkeeper.exe into that same folder,
+    deliberately beside data\, so the exe and "python desktop.py" read the
+    same books.
+
+    ON MACOS the same command builds dist/Bookkeeper.app and wraps it in
+    dist/Bookkeeper.dmg instead (it uses hdiutil, which every Mac has). It
+    does NOT put anything beside the source, because on a Mac the books are
+    in ~/Library/Application Support/Bookkeeper and there is nothing here for
+    the app to sit next to. Python 3.12+ from python.org works; so does the
+    Homebrew one.
 
 B4. Put the books in place - see below - and double-click the exe. Or run it
     straight from source, which needs no build at all:
@@ -150,13 +198,34 @@ On the WORK computer they are staged ready to carry at:
       C:\Users\223137552.AEROAD\claude-projects\transfer-to-home\Bookkeeper-data\
 
 Carry that folder by a route you are comfortable with - an encrypted USB stick
-(BitLocker To Go), or a password-protected archive. Then on the PERSONAL
-computer put it next to the executable and name it exactly data:
+(BitLocker To Go), or a password-protected archive.
+
+ON WINDOWS, put it next to the executable and name it exactly data:
 
       C:\Bookkeeper\Bookkeeper.exe
       C:\Bookkeeper\data\books.db
       C:\Bookkeeper\data\amit-usa.db
       C:\Bookkeeper\data\...
+
+ON THE MAC it goes somewhere else entirely - NOT inside the app:
+
+      ~/Library/Application Support/Bookkeeper/data/books.db
+      ~/Library/Application Support/Bookkeeper/data/amit-usa.db
+      ~/Library/Application Support/Bookkeeper/data/...
+
+    That folder will not exist until you make it. In Finder press
+    Shift-Cmd-G and paste:  ~/Library/Application Support
+    then create a folder "Bookkeeper" inside it, and put the carried "data"
+    folder in there. (The Library folder is hidden by default, which is why
+    Shift-Cmd-G rather than browsing for it.)
+
+    Or in Terminal:
+      mkdir -p ~/Library/Application\ Support/Bookkeeper
+      cp -R /Volumes/<your-usb>/Bookkeeper-data ~/Library/Application\ Support/Bookkeeper/data
+
+IF YOU RUN BOTH MACHINES, they each have their OWN books from that moment on.
+Nothing synchronises them. Enter vouchers on one machine only, or you will
+have two divergent sets of books with no way to merge them.
 
 What should be in there, to check nothing was lost in transit. Open each with
 F3 (Switch company):
@@ -181,7 +250,7 @@ financial records sitting on a machine that is not yours.
 ===============================================================================
 THE ONE WARNING THAT MATTERS MOST
 ===============================================================================
-THE BOOKS LIVE BESIDE THE EXECUTABLE, NOT IN %APPDATA%.
+ON WINDOWS, THE BOOKS LIVE BESIDE THE EXECUTABLE, NOT IN %APPDATA%.
 
 This is different from Net Worth Tracker, where data lives in
 %APPDATA%\com.networth.tracker\ and the installer never touches it. Bookkeeper
@@ -195,9 +264,23 @@ open blank books - which looks exactly like every book you own has been lost.
 It has not been; the books are still in the old folder, and moving the exe
 back beside them restores everything.
 
-(If you would rather keep the exe somewhere else, set the BOOKS_DIR
-environment variable to the folder holding the books, and the exe will read
-them from there wherever it lives.)
+ON MACOS IT IS THE OPPOSITE, AND FOR A GOOD REASON.
+
+There the books live in ~/Library/Application Support/Bookkeeper/data,
+OUTSIDE the app, and the app never keeps anything inside itself. That is
+deliberate: on macOS you install by dragging the new Bookkeeper.app over the
+old one, which REPLACES it wholesale. Books kept inside the bundle would be
+destroyed on every single update. (And an unsigned app downloaded from the
+internet is run by macOS from a randomised read-only location the first time,
+so writing inside the bundle may not even work.)
+
+The practical upshot:
+  Windows - the exe must go back next to your books.
+  macOS   - the app can be replaced freely; never put books inside it.
+
+(On either platform, setting the BOOKS_DIR environment variable to the folder
+holding the books overrides all of this, and the app will read them from there
+wherever it lives.)
 
 
 ===============================================================================
@@ -223,10 +306,31 @@ TROUBLESHOOTING
     "More info" -> "Run anyway". Expected on every new version - the app has
     no code-signing certificate.
 
+MAC: "Bookkeeper.app cannot be opened because the developer cannot be
+verified", with only Cancel / Move to Bin
+    You double-clicked it. Right-click (or Control-click) the app and choose
+    Open instead - that dialog has an Open button, the double-click one does
+    not. Once per version. Stubborn cases:
+        xattr -d com.apple.quarantine /Applications/Bookkeeper.app
+
+MAC: "Bookkeeper is damaged and cannot be opened"
+    Same cause - the quarantine flag on an unsigned app - despite the
+    wording. Nothing is damaged. Use the xattr command above.
+
+MAC: the app bounces once in the Dock and quits
+    Run it from Terminal to see the error it is hiding:
+        /Applications/Bookkeeper.app/Contents/MacOS/Bookkeeper
+    Send me whatever it prints.
+
 The app opens but the books are empty
-    You are looking at a data\ folder the exe made for itself because it could
-    not find yours. Close it, move the exe into the folder that holds your
-    data\, and start it again. See "THE ONE WARNING THAT MATTERS MOST".
+    WINDOWS: you are looking at a data\ folder the exe made for itself
+    because it could not find yours. Close it, move the exe into the folder
+    that holds your data\, and start it again.
+    MAC: the books are not where the app looks. They must be at
+    ~/Library/Application Support/Bookkeeper/data - check the spelling of
+    "data" and that the .db files are directly inside it, not in a nested
+    folder such as data/Bookkeeper-data/.
+    See "THE ONE WARNING THAT MATTERS MOST".
 
 A company is missing from the F3 dropdown
     The folder IS the registry: every .db directly inside data\ is a company.
@@ -270,11 +374,17 @@ Run the checks (desktop-only machine: these three, not test_ui.py)
 Make a source-only ZIP
     git archive --format=zip -o "%USERPROFILE%\Downloads\bookkeeper-src.zip" HEAD
 
-Cut a release that builds an exe in the cloud
+Cut a release that builds BOTH downloads in the cloud
     git tag v1.0.1 && git push origin v1.0.1
 
 The books (back these up)
-    the data\ folder beside the executable
+    Windows   the data\ folder beside the executable
+    macOS     ~/Library/Application Support/Bookkeeper/data
+
+Install the first time
+    Windows   put the .exe in the folder holding data\, double-click
+    macOS     drag the app from the .dmg to Applications, then
+              RIGHT-CLICK -> Open (not double-click)
 
 Switch company          F3
 Back up now             Ctrl+B

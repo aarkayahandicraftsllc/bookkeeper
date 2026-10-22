@@ -565,6 +565,25 @@ try:
           frozen_dir, Path(sys.executable).resolve().parent)
     check("and NOT the unpacked module directory",
           frozen_dir == Path(db.__file__).resolve().parent, False)
+
+    # macOS packages the app as Bookkeeper.app/Contents/MacOS/Bookkeeper, so
+    # the executable's folder is INSIDE the bundle. Books kept there would be
+    # destroyed every time the app is replaced - on macOS you install by
+    # dragging the new bundle over the old - and an unsigned downloaded app is
+    # run from a randomised read-only path by Gatekeeper, where the write
+    # fails or goes somewhere temporary. Same family as the bug above.
+    _real_platform = sys.platform
+    try:
+        sys.platform = "darwin"
+        sys.executable = "/Applications/Bookkeeper.app/Contents/MacOS/Bookkeeper"
+        mac_dir = db._app_dir()
+        check("on macOS the anchor is Application Support",
+              mac_dir,
+              Path.home() / "Library" / "Application Support" / "Bookkeeper")
+        check("so the books are NOT inside the .app bundle",
+              ".app" in str(mac_dir), False)
+    finally:
+        sys.platform = _real_platform
 finally:
     sys.executable = _real_executable
     if _real_frozen is None:
